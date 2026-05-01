@@ -2,26 +2,17 @@
 BIN/*
 !BIN/.gitkeep
 
-# Data Folders
-ALL_PACKS/
-Channel_Data/
-backups/
-20VC_with_Harry_Stebbings/
-Alex_Hormozi/
-BigDeal_by_Codie_Sanchez_/
-Codie_Sanchez/
-Marketing_Mania/
-Marketing_Mania_Daily/
-My_First_Million/
-Oussama_Ammar/
-Racem_Flazi/
-The_Futur/
-Y_Combinator/
+# Ignore ALL subdirectories in the root (covers all channel folders without naming them)
+/*/
+
+# Except these directories if you want to keep them (optional)
+!BIN/
 
 # Logs and sensitive info
 pipeline_operations.log
 cookie.txt
 cookies.txt
+*.log
 
 # OS files
 .DS_Store
