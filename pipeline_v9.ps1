@@ -32,6 +32,7 @@ if (!(Test-Path $configFile)) {
     "URL;Prefixe;Langue" | Out-File -LiteralPath $configFile -Encoding utf8
 }
 
+$blacklistPath = Join-Path $PSScriptRoot "blacklist.txt"
 $blacklistCandidates = [System.Collections.Generic.List[PSObject]]::new()
 $threadLimit = 16 # Cible pour l'Intel Core Ultra 7
 
@@ -449,7 +450,7 @@ function Sync-YouTube {
                 & $YtDlp --user-agent $userAgent @Cookies `
                     --ffmpeg-location $Ffmpeg `
                     --write-auto-sub --write-info-json `
-                    --sub-langs ($Lang -eq "auto" ? "fr,en,.*" : $Lang) --skip-download --convert-subs srt `
+                    --sub-langs ($Lang -eq "auto" ? "fr,en" : $Lang) --skip-download --convert-subs srt `
                     --min-sleep-interval 10 --max-sleep-interval 40 --sleep-requests 1 `
                     --download-archive (Join-Path $BaseDir "archive.txt") `
                     -o (Join-Path $RawDir "%(upload_date)s - %(title)s.%(ext)s") $vidUrl 2>&1
