@@ -453,7 +453,7 @@ function Sync-YouTube {
                     --sub-langs ($Lang -eq "auto" ? "fr,en" : $Lang) --skip-download --convert-subs srt `
                     --min-sleep-interval 10 --max-sleep-interval 40 --sleep-requests 1 `
                     --download-archive (Join-Path $BaseDir "archive.txt") `
-                    -o (Join-Path $RawDir "%(upload_date)s - %(title)s.%(ext)s") $vidUrl 2>&1
+                    -o (Join-Path $RawDir "%(upload_date)s - %(title)s [%(id)s].%(ext)s") $vidUrl 2>&1
             }
             
             $dlpCmd.Invoke() | ForEach-Object {
