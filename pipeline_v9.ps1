@@ -48,8 +48,9 @@ $channelsToProcess = @()
 if ($mode -eq "1") {
     $url = Read-Host "URL de la chaine YouTube"
     $abbrev = Read-Host "Prefixe pour les packs (ex: YC)"
-    $lang = Read-Host "Langue des sous-titres (Tapez 'fr' pour Francais, 'en' pour Anglais)"
-    if ($lang -notin @('fr', 'en')) { $lang = 'fr' }
+    $lang = Read-Host "Langue (fr, en, ou 'auto' pour detection automatique) [fr]"
+    if ([string]::IsNullOrWhiteSpace($lang)) { $lang = 'fr' }
+    if ($lang -notin @('fr', 'en', 'auto')) { $lang = 'fr' }
     
     $existing = Import-Csv -Path $configFile -Delimiter ";" -Encoding utf8
     $exists = $false
@@ -165,7 +166,7 @@ function Process-LocalFiles {
         $newDenseCreated = 0
         
         $srtFile = $file.FullName
-        $extRegex = '\.' + $Lang + '\.srt$|\.' + $Lang + '\.vtt$|\.srt$|\.vtt$'
+        $extRegex = '\.[a-z]{2}(-[A-Z]{2,4})?\.(srt|vtt)$|\.(srt|vtt)$'
         $jsonFile = $srtFile -replace $extRegex, '.info.json'
         
         $title = ""; $date = ""; $vUrl = "URL non disponible"
@@ -253,7 +254,7 @@ function Process-LocalFiles {
         # Fallback pour PowerShell 5.1 (Sequentiel)
         $results = foreach ($file in $rawFiles) {
             $srtFile = $file.FullName
-            $extRegex = '\.' + $Lang + '\.srt$|\.' + $Lang + '\.vtt$|\.srt$|\.vtt$'
+            $extRegex = '\.[a-z]{2}(-[A-Z]{2,4})?\.(srt|vtt)$|\.(srt|vtt)$'
             $jsonFile = $srtFile -replace $extRegex, '.info.json'
             $title = ""; $date = ""; $vUrl = "URL non disponible"
             if (Test-Path -LiteralPath $jsonFile) {
@@ -448,7 +449,7 @@ function Sync-YouTube {
                 & $YtDlp --user-agent $userAgent @Cookies `
                     --ffmpeg-location $Ffmpeg `
                     --write-auto-sub --write-info-json `
-                    --sub-langs $Lang --skip-download --convert-subs srt `
+                    --sub-langs ($Lang -eq "auto" ? "fr,en,.*" : $Lang) --skip-download --convert-subs srt `
                     --min-sleep-interval 10 --max-sleep-interval 40 --sleep-requests 1 `
                     --download-archive (Join-Path $BaseDir "archive.txt") `
                     -o (Join-Path $RawDir "%(upload_date)s - %(title)s.%(ext)s") $vidUrl 2>&1
