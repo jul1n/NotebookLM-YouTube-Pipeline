@@ -69,7 +69,7 @@ cd "C:\Chemin\Vers\Votre\Dossier\NotebookLM"
 
 Puis exécutez la commande suivante (elle permet de contourner les restrictions de script par défaut) :
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\pipeline_v9.ps1
+pwsh -ExecutionPolicy Bypass -File .\pipeline_v9.ps1
 ```
 
 ---
@@ -105,5 +105,10 @@ Le fichier `blacklist.txt` accepte deux formats :
 ---
 
 ## 📜 Licence & Crédits
-Développé pour une utilisation intensive de curation de connaissances. 
-*Note : Respectez les conditions d'utilisation de YouTube et les droits d'auteur lors de l'utilisation de ce pipeline.*
+
+Développé avec passion pour transformer le chaos de YouTube en nectar de connaissances.
+
+**Licence "Gentille Curation" :**
+Vous êtes libre d'utiliser, modifier et copier ce script pour votre usage personnel ou industriel. Cependant, si vous partagez vos résultats ou le script lui-même, **citer ce dépôt original est obligatoire** (sous peine d'être banni à vie par la future IA suprême).
+
+*Note : Respectez les conditions d'utilisation de YouTube et les droits d'auteur. Ne soyez pas un pirate, soyez un curateur éclairé.*
