@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.3
+# Industrial YouTube Transcription Pipeline v10.4
 # Unified Industrial Suite for NotebookLM
-# v10.3: Pack verification module with word count color-coding.
+# v10.4: Ultra-aggressive VTT cleaning & case-insensitive JSON support.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -914,7 +914,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v10.3 Unified            ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v10.4 Unified            ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
