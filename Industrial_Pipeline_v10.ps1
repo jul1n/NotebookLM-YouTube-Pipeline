@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.1
+# Industrial YouTube Transcription Pipeline v10.2
 # Unified Industrial Suite for NotebookLM
-# v10.1: Parallelization (8 threads), Enhanced UI, grouped blacklist reporting.
+# v10.2: UI polish (removed > prefix), fixed wildcard bracket bugs.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -64,7 +64,7 @@ function Write-StepHeader {
 
 function Write-SubStep {
     param ($Title, $StepNum, $TotalSteps, $Emoji = "🔹", $Status = "")
-    $prefix = "  > [$StepNum/$TotalSteps] $Emoji $Title"
+    $prefix = "  [$StepNum/$TotalSteps] $Emoji $Title"
     Write-Host $prefix.PadRight(40) -NoNewline -ForegroundColor Gray
     if ($Status) { Write-Host " : $Status" -ForegroundColor White }
     else { Write-Host "" }
@@ -93,7 +93,7 @@ function Write-Log {
                 Write-Host "[$prefix] " -NoNewline -ForegroundColor Gray
                 Write-Host $shortMsg -ForegroundColor $color
             } else {
-                Write-Host "  > $shortMsg" -ForegroundColor $color
+                Write-Host "    $shortMsg" -ForegroundColor $color
             }
         }
     }
@@ -817,7 +817,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             INDUSTRIAL PIPELINE v10.1 UNIFIED            ║" -ForegroundColor White
+    Write-Host "  ║             INDUSTRIAL PIPELINE v10.2 UNIFIED            ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaine (Manuel)"
     Write-Host "  2. 🔄 Rafraichir toutes les chaines (Auto)"
@@ -962,11 +962,11 @@ while ($true) {
         $steps = @("Migration", "Integrite", "Doublons", "Packs", "Langues")
         $totalSteps = $steps.Count
 
-        $doMigration = (Read-Host "  > [1/$totalSteps] Lancer la MIGRATION ? [O/N] (Defaut: N)").ToUpper() -eq "O"
-        $doIntegrity = (Read-Host "  > [2/$totalSteps] Lancer le DIAGNOSTIC D'INTEGRITE ? [O/N] (Defaut: O)").ToUpper() -ne "N"
-        $doDoublons  = (Read-Host "  > [3/$totalSteps] Lancer le NETTOYAGE DES DOUBLONS ? [O/N] (Defaut: O)").ToUpper() -ne "N"
-        $doPacks     = (Read-Host "  > [4/$totalSteps] RECONSTRUIRE LES PACKS ? [O/N] (Defaut: O)").ToUpper() -ne "N"
-        $doLangues   = (Read-Host "  > [5/$totalSteps] Lancer le FILTRAGE DES LANGUES ? [O/N] (Defaut: N)").ToUpper() -eq "O"
+        $doMigration = (Read-Host "  [1/$totalSteps] Lancer la MIGRATION ? [O/N] (Defaut: N)").ToUpper() -eq "O"
+        $doIntegrity = (Read-Host "  [2/$totalSteps] Lancer le DIAGNOSTIC D'INTEGRITE ? [O/N] (Defaut: O)").ToUpper() -ne "N"
+        $doDoublons  = (Read-Host "  [3/$totalSteps] Lancer le NETTOYAGE DES DOUBLONS ? [O/N] (Defaut: O)").ToUpper() -ne "N"
+        $doPacks     = (Read-Host "  [4/$totalSteps] RECONSTRUIRE LES PACKS ? [O/N] (Defaut: O)").ToUpper() -ne "N"
+        $doLangues   = (Read-Host "  [5/$totalSteps] Lancer le FILTRAGE DES LANGUES ? [O/N] (Defaut: N)").ToUpper() -eq "O"
 
         # Etape 1: Migration
         if ($doMigration) {
