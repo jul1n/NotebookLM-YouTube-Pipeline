@@ -57,9 +57,14 @@ function Write-StepHeader {
     param ($Title, $StepNum = $null, $TotalSteps = $null, $Emoji = "📦")
     $line = "══════════════════════════════════════════════"
     $fullTitle = if ($StepNum) { "[ETAPE $StepNum/$TotalSteps] $Title" } else { $Title }
-    Write-Host "`n  ╔$($line)╗" -ForegroundColor Cyan
-    Write-Host "  ║ $Emoji $( $fullTitle.PadRight($line.Length - 4) ) ║" -ForegroundColor White
-    Write-Host "  ╚$($line)╝" -ForegroundColor Cyan
+    # Padding manuel pour eviter les artefacts de PadRight
+    $rawTitle = "$Emoji $fullTitle"
+    $padSize = 44 - $rawTitle.Length
+    if ($padSize -lt 0) { $padSize = 0 }
+    $padding = " " * $padSize
+    Write-Host "`n  ╔$line╗" -ForegroundColor Cyan
+    Write-Host "  ║ $rawTitle$padding║" -ForegroundColor White
+    Write-Host "  ╚$line╝" -ForegroundColor Cyan
 }
 
 function Write-SubStep {
@@ -893,7 +898,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v10.2 Unified            ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v10.3 Unified            ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
@@ -1032,7 +1037,7 @@ while ($true) {
     elseif ($choice -eq "5") { Run-ReSubtitling }
     elseif ($choice -eq "6") {
         Write-Host "  ╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "  ║          Maintenance globale du pipeline     ║" -ForegroundColor White
+        Write-Host "  ║       Maintenance globale du pipeline        ║" -ForegroundColor White
         Write-Host "  ╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
         
         $steps = @("Migration", "Integrite", "Doublons", "Packs", "Langues", "Verification")
