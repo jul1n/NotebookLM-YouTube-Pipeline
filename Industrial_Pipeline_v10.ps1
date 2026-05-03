@@ -414,7 +414,13 @@ function Process-LocalFiles {
         if ($subFile) {
             try {
                 $content = Get-Content -LiteralPath $subFile -Raw
-                $txt = $content -replace '<.*?>', '' -replace '^\d+\s*$', '' -replace '^\d{2}:\d{2}:\d{2}.*', '' -replace '-->.*', ''
+                $txt = $content -replace '<.*?>', '' # Tags
+                $txt = $txt -replace '(?m)^\d+\s*$', '' # Index
+                $txt = $txt -replace '(?m)^.*?\d{1,2}:\d{2}:\d{2}.*?$', '' # Timestamps HH:mm:ss
+                $txt = $txt -replace '(?m)^.*?\d{1,2}:\d{2}\.\d{3}.*?$', '' # Timestamps mm:ss.ms
+                $txt = $txt -replace '(?m)^.*?-->.*?$', '' # Ligne avec fleche
+                $txt = $txt -replace '(?m)^\s*$', '' # Lignes vides
+                
                 $lines = $txt -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
                 $cleanTxt = [System.Collections.Generic.HashSet[string]]::new()
                 foreach ($l in $lines) { [void]$cleanTxt.Add($l) }
@@ -422,8 +428,23 @@ function Process-LocalFiles {
                 
                 if ($finalTxt.Trim().Length -gt 10) {
                     $finalTxt | Out-File -LiteralPath $txtPath -Encoding utf8
-                    $jsonMeta = Get-Content -LiteralPath $json.FullName -Raw
-                    $denseContent = $jsonMeta.Trim() + "`r`n`r`n" + $finalTxt
+                    
+                    # On ne garde que l'essentiel de la meta pour le fichier dense (evite les leaks de 2MB de JSON)
+                    try {
+                        $meta = $jsonMeta | ConvertFrom-Json
+                        $compactMeta = @{
+                            id = $meta.id
+                            title = $meta.title
+                            upload_date = $meta.upload_date
+                            channel = $meta.channel
+                            description = $meta.description
+                            view_count = $meta.view_count
+                        } | ConvertTo-Json -Compress
+                        $denseContent = "[METADATA]" + $compactMeta + "[/METADATA]" + "`r`n`r`n" + $finalTxt
+                    } catch {
+                        $denseContent = "[METADATA_RAW]" + ($jsonMeta.Substring(0, [Math]::Min(1000, $jsonMeta.Length))) + "[/METADATA_RAW]" + "`r`n`r`n" + $finalTxt
+                    }
+                    
                     $denseContent | Out-File -LiteralPath $densePath -Encoding utf8
                     
                     if ($Settings.AutoClean) {
@@ -456,7 +477,8 @@ function Build-Packs {
 
     foreach ($file in $denseFiles) {
         $content = Get-Content -LiteralPath $file.FullName -Raw
-        $wordCount = ($content -split "\s+" | Where-Object { $_ -ne "" }).Count
+        $txtOnly = if ($content -match "\[/METADATA.*?\](?:\r?\n){2}(.*)") { $Matches[1] } else { $content }
+        $wordCount = ($txtOnly -split "\s+" | Where-Object { $_ -ne "" }).Count
         if (($currentWords + $wordCount) -gt 500000 -and $currentBatch.Count -gt 0) {
             $packsPlan.Add([PSCustomObject]@{ ID=$packNum; Files=$currentBatch.ToArray(); TotalWords=$currentWords; Start=$currentBatch[0].Name.Substring(0,8); End=$currentBatch[-1].Name.Substring(0,8) })
             $packNum++; $currentBatch = [System.Collections.Generic.List[PSObject]]::new(); $currentWords = 0
@@ -474,7 +496,12 @@ function Build-Packs {
             $pName = $Prefix + "_" + $plan.ID.ToString("00") + "_(" + $sFmt + "-au-" + $eFmt + ").txt"
             $pPath = Join-Path $PacksDir $pName
             $sb = New-Object System.Text.StringBuilder
-            foreach ($b in $plan.Files) { [void]$sb.AppendLine((Get-Content -LiteralPath $b.FullName -Raw)); [void]$sb.AppendLine("`r`n################################### SOURCE: $($b.BaseName) ###################################`r`n") }
+            foreach ($b in $plan.Files) { 
+                $content = Get-Content -LiteralPath $b.FullName -Raw
+                $txtOnly = if ($content -match "\[/METADATA.*?\](?:\r?\n){2}(.*)") { $Matches[1] } else { $content }
+                [void]$sb.AppendLine($txtOnly)
+                [void]$sb.AppendLine("`r`n################################### SOURCE: $($b.BaseName) ###################################`r`n") 
+            }
             $sb.ToString() | Out-File -LiteralPath $pPath -Encoding utf8
             
             # Export securise vers ALL_PACKS
@@ -527,8 +554,10 @@ function Repair-Packs {
         $files = Get-ChildItem -LiteralPath $denseDir -Filter "*.txt"
         foreach ($f in $files) {
             $content = [System.IO.File]::ReadAllText($f.FullName)
-            if ($content -match '\{"id":' -or $content -match '"formats":') {
-                Write-Host "  [!] Fuite JSON dans le texte : $($f.Name)" -ForegroundColor Red
+            # Detection de fuite JSON : si on trouve des cles JSON en dehors du bloc METADATA
+            $textContent = if ($content -match "\[/METADATA.*?\]`r?`n`r?`n(.*)") { $Matches[1] } else { $content }
+            if ($textContent -match '"formats":' -or $textContent -match '"url":' -or $textContent -match '"downloader_options":') {
+                Write-Host "    [!] Fuite JSON dans le texte : $($f.Name)" -ForegroundColor Red
                 Remove-Item -LiteralPath $f.FullName -Force; $corruptedCount++
                 # On supprime aussi le RAW correspondant pour forcer le retraitement
                 $id = if ($f.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $Matches[1] }
