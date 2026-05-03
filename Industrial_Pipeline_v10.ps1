@@ -817,16 +817,16 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             INDUSTRIAL PIPELINE v10.2 UNIFIED            ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v10.2 Unified            ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
-    Write-Host "  1. ➕ Ajouter et traiter une chaine (Manuel)"
-    Write-Host "  2. 🔄 Rafraichir toutes les chaines (Auto)"
-    Write-Host "  3. 🔁 Retenter uniquement les echecs (Rapide)"
-    Write-Host "  4. 🌐 Lancer le diagnostic de LANGUE (Filtrage)"
-    Write-Host "  5. 📽️ Lancer le workflow RE-SUBTITLING (Videos 1fps)"
-    Write-Host "  6. 🛠️ Maintenance GLOBALE (Nettoyage + Diagnostic)"
-    Write-Host "  7. 📊 Generer l'INVENTAIRE GLOBAL (Fichier CSV)"
-    Write-Host "  8. ⚙️ PARAMETRES (Cookies, Delais, etc.)"
+    Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
+    Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
+    Write-Host "  3. 🔁 Retenter uniquement les échecs (rapide)"
+    Write-Host "  4. 🌐 Lancer le diagnostic de langue (filtrage)"
+    Write-Host "  5. 📽️ Lancer le workflow de re-sous-titrage (1 fps)"
+    Write-Host "  6. 🛠️ Maintenance globale (nettoyage + diagnostic)"
+    Write-Host "  7. 📊 Générer l'inventaire global (fichier CSV)"
+    Write-Host "  8. ⚙️ Paramètres (cookies, délais, etc.)"
     Write-Host "  0. 👋 Quitter"
     Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Gray
     
@@ -955,18 +955,18 @@ while ($true) {
     elseif ($choice -eq "4") { Run-LanguageDiagnostic }
     elseif ($choice -eq "5") { Run-ReSubtitling }
     elseif ($choice -eq "6") {
-        Write-Host "`n  ╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "  ║          MAINTENANCE GLOBALE DU PIPELINE     ║" -ForegroundColor White
+        Write-Host "  ╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "  ║          Maintenance globale du pipeline     ║" -ForegroundColor White
         Write-Host "  ╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
         
         $steps = @("Migration", "Integrite", "Doublons", "Packs", "Langues")
         $totalSteps = $steps.Count
 
-        $doMigration = (Read-Host "  [1/$totalSteps] Lancer la MIGRATION ? [O/N] (Defaut: N)").ToUpper() -eq "O"
-        $doIntegrity = (Read-Host "  [2/$totalSteps] Lancer le DIAGNOSTIC D'INTEGRITE ? [O/N] (Defaut: O)").ToUpper() -ne "N"
-        $doDoublons  = (Read-Host "  [3/$totalSteps] Lancer le NETTOYAGE DES DOUBLONS ? [O/N] (Defaut: O)").ToUpper() -ne "N"
-        $doPacks     = (Read-Host "  [4/$totalSteps] RECONSTRUIRE LES PACKS ? [O/N] (Defaut: O)").ToUpper() -ne "N"
-        $doLangues   = (Read-Host "  [5/$totalSteps] Lancer le FILTRAGE DES LANGUES ? [O/N] (Defaut: N)").ToUpper() -eq "O"
+        $doMigration = (Read-Host "  [1/$totalSteps] Lancer la migration ? [O/N] (Défaut: N)").ToUpper() -eq "O"
+        $doIntegrity = (Read-Host "  [2/$totalSteps] Lancer le diagnostic d'intégrité ? [O/N] (Défaut: O)").ToUpper() -ne "N"
+        $doDoublons  = (Read-Host "  [3/$totalSteps] Lancer le nettoyage des doublons ? [O/N] (Défaut: O)").ToUpper() -ne "N"
+        $doPacks     = (Read-Host "  [4/$totalSteps] Reconstruire les packs ? [O/N] (Défaut: O)").ToUpper() -ne "N"
+        $doLangues   = (Read-Host "  [5/$totalSteps] Lancer le filtrage des langues ? [O/N] (Défaut: N)").ToUpper() -eq "O"
 
         # Etape 1: Migration
         if ($doMigration) {
