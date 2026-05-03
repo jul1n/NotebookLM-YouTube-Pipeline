@@ -22,6 +22,26 @@ $ReSubDir = Join-Path $BaseDir "_RE_SUBTITLING_WORK"
 $AudioDir = Join-Path $ReSubDir "1_AUDIO"
 $ThumbDir = Join-Path $ReSubDir "2_THUMBS"
 $OutputDir = Join-Path $ReSubDir "3_STATIC_VIDEOS"
+$ReSubDir = Join-Path $BaseDir "_RE_SUBTITLING_WORK"
+$SettingsPath = Join-Path $BaseDir "settings.json"
+
+# Default Settings
+$global:Settings = @{
+    CookieSource = "firefox"
+    MaxPlaylistEnd = 2000
+    AutoClean = $true
+}
+
+if (Test-Path $SettingsPath) {
+    try {
+        $saved = Get-Content $SettingsPath | ConvertFrom-Json
+        foreach ($k in $saved.PSObject.Properties.Name) { $global:Settings[$k] = $saved.$k }
+    } catch { }
+}
+
+function Save-Settings {
+    $global:Settings | ConvertTo-Json | Out-File $SettingsPath -Encoding utf8
+}
 
 # Ensure core directories exist
 foreach ($p in @($BinDir, $AllPacksDir, $LogsDir, $ReSubDir, $AudioDir, $ThumbDir, $OutputDir)) {
@@ -42,9 +62,22 @@ function Write-Log {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logMsg = "[$timestamp] [$prefix] $msg"
     $logFile = Join-Path $LogsDir "pipeline.log"
-    $logMsg | Add-Content -LiteralPath $logFile -ErrorAction SilentlyContinue
-    Write-Host "[$timestamp] [$prefix] " -NoNewline -ForegroundColor Gray
-    Write-Host $msg -ForegroundColor $color
+    
+    # Retry logic pour le log global (multi-instance)
+    $success = $false; $attempts = 0
+    while (-not $success -and $attempts -lt 5) {
+        try {
+            $attempts++
+            $logMsg | Add-Content -LiteralPath $logFile -ErrorAction Stop
+            $success = $true
+        } catch { Start-Sleep -Milliseconds 200 }
+    }
+
+    # On ne filtre QUE l'affichage terminal, on garde tout dans le log
+    if ($msg -notmatch "\[download\]\s+\d+\.\d+%" -and $msg -notmatch "\[download\]\s+\d+\s+of") {
+        Write-Host "[$timestamp] [$prefix] " -NoNewline -ForegroundColor Gray
+        Write-Host $msg -ForegroundColor $color
+    }
 }
 
 function Get-SafeContent {
@@ -101,6 +134,15 @@ function Sync-YouTube {
     $masterListPath = Join-Path $BaseDir "youtube_master_list.txt"
     $missingListPath = Join-Path $BaseDir "missing_videos.txt"
     
+    # Gestion des Cookies persistee via Settings
+    $useCookies = @()
+    if ($global:Settings.CookieSource -eq "txt") {
+        $cookieFile = Join-Path $PSScriptRoot "cookies.txt"
+        if (Test-Path $cookieFile) { $useCookies = @("--cookies", $cookieFile) }
+    } elseif ($global:Settings.CookieSource -match "firefox|chrome|edge") {
+        $useCookies = @("--cookies-from-browser", $global:Settings.CookieSource)
+    }
+
     $blacklist = @()
     if (Test-Path $BlacklistPath) {
         $blRaw = Get-Content $BlacklistPath
@@ -114,7 +156,7 @@ function Sync-YouTube {
         $masterIds = Get-Content $missingListPath | Where-Object { $_ -ne "" }
     } else {
         Write-Log "Extraction de la liste des videos..." "Gray" $LogPrefix
-        $masterIds = & $YtDlp --get-id --flat-playlist --playlist-end 2000 $Url 2>$null
+        $masterIds = & $YtDlp --get-id --flat-playlist --playlist-end $($global:Settings.MaxPlaylistEnd) $Url 2>$null
         $masterIds | Out-File -LiteralPath $masterListPath -Encoding utf8
     }
 
@@ -170,7 +212,7 @@ function Sync-YouTube {
             $noSubsFound = $false; $currentTitle = "ID: $id"
 
             $dlpCmd = {
-                & $YtDlp --user-agent $userAgent @Cookies `
+                & $YtDlp --user-agent $userAgent @useCookies `
                     --ffmpeg-location $Ffmpeg `
                     --write-auto-sub --write-info-json --ignore-errors `
                     --sub-langs ($Lang -eq "auto" ? "fr,en" : $Lang) --skip-download --convert-subs srt `
@@ -194,7 +236,14 @@ function Sync-YouTube {
                         Write-Host $title -NoNewline -ForegroundColor Cyan
                         Write-Host $line.Substring($idx + $title.Length) -ForegroundColor Gray
                     } else { Write-Host "  $line" -ForegroundColor Gray }
-                } else { Write-Host "  $line" -ForegroundColor DarkGray }
+                } elseif ($line -match "\[download\]\s+\d+\.\d+%" -or $line -match "\[download\]\s+\d+\s+of") {
+                    # On n'affiche pas la progression de telechargement dans le terminal (trop de bruit)
+                } else { 
+                    # On affiche le reste en gris fonce
+                    if ($line.Trim() -ne "") { Write-Host "  $line" -ForegroundColor DarkGray }
+                }
+                # Par contre, on logue TOUT dans le fichier pour archive
+                Write-Log $line "White" $LogPrefix
                 $line
             }
 
@@ -516,19 +565,45 @@ while ($true) {
     Write-Host "6. Lancer le workflow RE-SUBTITLING (Videos 1fps)"
     Write-Host "7. Maintenance GLOBALE (Nettoyage + Diagnostic)"
     Write-Host "8. Generer l'INVENTAIRE GLOBAL (Fichier CSV)"
+    Write-Host "9. PARAMETRES (Cookies, Delais, etc.)"
     Write-Host "0. Quitter"
     Write-Host "-------------------------------------------------"
-    $choice = Read-Host "Votre choix"
+    
+    $choice = ""
+    while ($choice -notmatch "^[0-9]$") {
+        $choice = Read-Host "Votre choix"
+        if ($choice -notmatch "^[0-9]$") { Write-Host "[!] Choix invalide. Tapez un chiffre entre 0 et 9." -ForegroundColor Red }
+    }
 
     if ($choice -eq "0") { break }
     
     # Configuration Load
     $channels = Import-Csv $ConfigPath -Delimiter ";"
     
+    if ($choice -eq "9") {
+        Clear-Host
+        Write-Host "=== PARAMETRES DU PIPELINE ===" -ForegroundColor Cyan
+        Write-Host "1. Source des Cookies (Actuel: $($global:Settings.CookieSource))"
+        Write-Host "2. Limite de scan playlist (Actuel: $($global:Settings.MaxPlaylistEnd))"
+        Write-Host "0. Retour"
+        $sChoice = Read-Host "Modifier quel parametre ?"
+        if ($sChoice -eq "1") {
+            Write-Host "Sources valides: firefox, chrome, edge, txt, none"
+            $newC = Read-Host "Nouvelle source"
+            if ($newC -match "firefox|chrome|edge|txt|none") { $global:Settings.CookieSource = $newC; Save-Settings }
+        } elseif ($sChoice -eq "2") {
+            $newL = Read-Host "Nouvelle limite (ex: 2000)"
+            if ($newL -match "^\d+$") { $global:Settings.MaxPlaylistEnd = [int]$newL; Save-Settings }
+        }
+        continue
+    }
+
     if ($choice -match "[12347]") {
         $mode = if ($choice -eq "7") { "3" } else { $choice }
         $targets = if ($choice -eq "1") { 
-            $url = Read-Host "URL de la chaine"; $pref = Read-Host "Prefixe"; @([PSCustomObject]@{ URL=$url; Prefixe=$pref; Lang="auto" })
+            $url = ""; while ($url -notmatch "youtube\.com") { $url = Read-Host "URL de la chaine (doit contenir youtube.com)"; if ($url -notmatch "youtube\.com") { Write-Host "[!] URL invalide." -ForegroundColor Red } }
+            $pref = ""; while ($pref -eq "") { $pref = Read-Host "Prefixe (ex: Oussama)"; if ($pref -eq "") { Write-Host "[!] Le prefixe ne peut pas etre vide." -ForegroundColor Red } }
+            @([PSCustomObject]@{ URL=$url; Prefixe=$pref; Lang="auto" })
         } else { $channels }
 
         # Cleanup before start
@@ -536,24 +611,45 @@ while ($true) {
         Clean-GlobalPacks -GlobalPacksDir $AllPacksDir -ValidPrefixes $validPrefixes
         
         foreach ($chan in $targets) {
-            Write-Host "`n>>> CHAINE : $($chan.URL)" -ForegroundColor Cyan
             $folder = ($chan.Prefixe -replace "[^a-zA-Z0-9]", "_").Trim()
             $cDir = Join-Path $BaseDir $folder
-            $p1 = Join-Path $cDir "1_RAW"; $p2 = Join-Path $cDir "2_TXT"; $p3 = Join-Path $cDir "3_TXT_dense"; $p4 = Join-Path $cDir "4_Packs"
-            foreach ($p in @($p1,$p2,$p3,$p4)) { if (!(Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null } }
+            
+            # On cree le dossier de base s'il n'existe pas encore (pour pouvoir poser le verrou)
+            if (!(Test-Path -LiteralPath $cDir)) { New-Item -ItemType Directory -Force -Path $cDir | Out-Null }
+            
+            $lockFile = Join-Path $cDir "process.lock"
 
-            if ($choice -eq "4") { Repair-Packs -BaseDir $cDir -Prefix $chan.Prefixe }
+            # Securite Multi-Instance : On verifie si la chaine est deja en cours de traitement
+            if (Test-Path $lockFile) {
+                Write-Host "`n>>> CHAINE : $($chan.Prefixe) [OCCUPEE - SAUT]" -ForegroundColor Yellow
+                continue
+            }
             
-            $ignored = Sync-YouTube -Url $chan.URL -RawDir $p1 -YtDlp $YtDlp -Ffmpeg $Ffmpeg -Cookies @() -Lang $chan.Lang -BaseDir $cDir -LogPrefix $chan.Prefixe -BlacklistPath $BlacklistPath -RetryOnly ($mode -eq "3")
-            Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $chan.Lang -Prefix $chan.Prefixe
-            Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $chan.Prefixe -LogPrefix $chan.Prefixe -GlobalPacksDir $AllPacksDir
-            
-            # Rapport
-            $master = (Get-SafeContent (Join-Path $cDir "youtube_master_list.txt")).Count
-            $missing = (Get-SafeContent (Join-Path $cDir "missing_videos.txt")).Count
-            $raw = (Get-ChildItem $p1 -Filter "*.info.json").Count
-            Write-Host "`n--- BILAN $($chan.Prefixe) ---" -ForegroundColor Green
-            Write-Host "  Total: $master | Pretes: $raw | Ignorees: $ignored | Manquantes: $missing" -ForegroundColor White
+            try {
+                # On pose le verrou
+                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                "Instance locked at $timestamp" | Out-File $lockFile
+                
+                Write-Host "`n>>> CHAINE : $($chan.URL)" -ForegroundColor Cyan
+                $p1 = Join-Path $cDir "1_RAW"; $p2 = Join-Path $cDir "2_TXT"; $p3 = Join-Path $cDir "3_TXT_dense"; $p4 = Join-Path $cDir "4_Packs"
+                foreach ($p in @($p1,$p2,$p3,$p4)) { if (!(Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null } }
+
+                if ($choice -eq "4") { Repair-Packs -BaseDir $cDir -Prefix $chan.Prefixe }
+                
+                $ignored = Sync-YouTube -Url $chan.URL -RawDir $p1 -YtDlp $YtDlp -Ffmpeg $Ffmpeg -Cookies @() -Lang $chan.Lang -BaseDir $cDir -LogPrefix $chan.Prefixe -BlacklistPath $BlacklistPath -RetryOnly ($mode -eq "3")
+                Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $chan.Lang -Prefix $chan.Prefixe
+                Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $chan.Prefixe -LogPrefix $chan.Prefixe -GlobalPacksDir $AllPacksDir
+                
+                # Rapport
+                $master = (Get-SafeContent (Join-Path $cDir "youtube_master_list.txt")).Count
+                $missing = (Get-SafeContent (Join-Path $cDir "missing_videos.txt")).Count
+                $raw = (Get-ChildItem $p1 -Filter "*.info.json").Count
+                Write-Host "`n--- BILAN $($chan.Prefixe) ---" -ForegroundColor Green
+                Write-Host "  Total: $master | Pretes: $raw | Ignorees: $ignored | Manquantes: $missing" -ForegroundColor White
+            } finally {
+                # On retire le verrou a la fin, quoi qu'il arrive
+                if (Test-Path $lockFile) { Remove-Item $lockFile -Force }
+            }
         }
         if ($choice -eq "7") { Run-LanguageDiagnostic }
     }
