@@ -34,8 +34,8 @@ $global:Settings = @{
 
 if (Test-Path $SettingsPath) {
     try {
-        $saved = Get-Content -LiteralPath $SettingsPath | ConvertFrom-Json
-        foreach ($k in $saved.PSObject.Properties.Name) { $global:Settings[$k] = $saved.$k }
+        $saved = Get-Content -LiteralPath $SettingsPath | ConvertFrom-Json -AsHashTable
+        foreach ($k in $saved.Keys) { $global:Settings[$k] = $saved[$k] }
     } catch { }
 }
 
@@ -431,7 +431,7 @@ function Process-LocalFiles {
                     
                     # On ne garde que l'essentiel de la meta pour le fichier dense (evite les leaks de 2MB de JSON)
                     try {
-                        $meta = $jsonMeta | ConvertFrom-Json
+                        $meta = $jsonMeta | ConvertFrom-Json -AsHashTable
                         $compactMeta = @{
                             id = $meta.id
                             title = $meta.title
@@ -536,7 +536,7 @@ function Repair-Packs {
                 try {
                     # Utilisation de -LiteralPath pour eviter les erreurs sur les []
                     $content = Get-Content -LiteralPath $f.FullName -Raw -ErrorAction Stop
-                    $null = $content | ConvertFrom-Json -ErrorAction Stop
+                    $null = $content | ConvertFrom-Json -AsHashTable -ErrorAction Stop
                 } catch {
                     $reason = $_.Exception.Message
                     Write-Host "    [!] JSON corrompu : $($f.Name) ($reason)" -ForegroundColor Red
