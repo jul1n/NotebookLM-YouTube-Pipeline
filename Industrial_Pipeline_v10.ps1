@@ -424,19 +424,27 @@ function Process-LocalFiles {
                 $txt = $txt -replace '(?s)<.*?>', '' # Tags HTML/VTT
                 $txt = $txt -replace 'WEBVTT|Kind: captions|Language: \S+', '' # Headers
                 
-                # Suppression globale des timestamps (meme au milieu d'une ligne)
-                $tsRegex = '\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}\s+-->\s+\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}'
-                $txt = $txt -replace $tsRegex, ''
+                # Suppression globale des timestamps et des infos de positionnement
+                # On couvre plusieurs formats (avec ou sans heures, virgule ou point)
+                $tsRegex = '\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}'
+                $txt = $txt -replace $tsRegex, ' '
+                $txt = $txt -replace 'align:\S+|position:\S+|line:\S+|size:\S+|region:\S+', ' '
                 
-                # Suppression des infos de positionnement et meta-data VTT
-                $txt = $txt -replace 'align:\S+|position:\S+|line:\S+|size:\S+|region:\S+', ''
-                $txt = $txt -replace '(?m)^\d+\s*$', '' # Index
-                $txt = $txt -replace '(?m)^\s*$', '' # Lignes vides
+                # Nettoyage des indices numeriques seuls (souvent presents dans SRT/VTT)
+                $txt = $txt -replace '(?m)^\d+\s*$', ''
                 
-                $lines = $txt -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-                $cleanTxt = [System.Collections.Generic.HashSet[string]]::new()
-                foreach ($l in $lines) { [void]$cleanTxt.Add($l) }
-                $finalTxt = $cleanTxt -join " "
+                # Si le texte est "aplatit" (tout sur une ligne), on tente de dedupliquer les mots repetitifs (rolling captions)
+                # On split par espace, on garde l'ordre mais on enleve les repetitions immediates
+                $words = $txt -split "\s+" | Where-Object { $_ -ne "" }
+                $uniqueWords = [System.Collections.Generic.List[string]]::new()
+                $lastWord = ""
+                foreach ($w in $words) {
+                    if ($w -ne $lastWord) {
+                        $uniqueWords.Add($w)
+                        $lastWord = $w
+                    }
+                }
+                $finalTxt = $uniqueWords -join " "
                 
                 if ($finalTxt.Trim().Length -gt 10) {
                     $finalTxt | Out-File -LiteralPath $txtPath -Encoding utf8
@@ -580,9 +588,13 @@ function Repair-Packs {
             if ($isDirty) {
                 Write-Host "    [!] $reason dans le texte : $($f.Name)" -ForegroundColor Red
                 Remove-Item -LiteralPath $f.FullName -Force; $corruptedCount++
-                # On supprime aussi le RAW correspondant pour forcer le retraitement
-                $id = if ($f.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $Matches[1] }
-                if ($id) { Get-ChildItem -LiteralPath $rawDir | Where-Object { $_.Name.Contains($id) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue }
+                
+                # Pour les artifacts VTT, on ne supprime PAS le RAW, on veut juste que Process-LocalFiles le regenere proprement.
+                # Pour les fuites JSON (corruption de structure), on supprime le RAW pour forcer le re-telechargement.
+                if ($reason -eq "Fuite JSON") {
+                    $id = if ($f.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $Matches[1] }
+                    if ($id) { Get-ChildItem -LiteralPath $rawDir | Where-Object { $_.Name.Contains($id) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue }
+                }
             }
         }
     }
