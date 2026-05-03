@@ -396,7 +396,7 @@ function Process-LocalFiles {
         
         if (Test-Path -LiteralPath $densePath) { 
             if ($Settings.AutoClean) {
-                Get-ChildItem -LiteralPath $RawDir | Where-Object { $_.Name -like "$baseName.*" -and $_.Extension -match "vtt|srt" } | Remove-Item -Force -ErrorAction SilentlyContinue
+                Get-ChildItem -LiteralPath $RawDir | Where-Object { $_.Name.StartsWith($baseName + ".") -and $_.Extension -match "vtt|srt" } | Remove-Item -Force -ErrorAction SilentlyContinue
                 if (Test-Path -LiteralPath $txtPath) { Remove-Item -LiteralPath $txtPath -Force -ErrorAction SilentlyContinue }
             }
             return $false 
@@ -513,8 +513,8 @@ function Repair-Packs {
                 } catch {
                     Write-Host "  [!] JSON corrompu : $($f.Name)" -ForegroundColor Red
                     $base = $f.FullName -replace '\.info\.json$', ''
-                    # On supprime tous les fichiers lies en filtrant sur le chemin complet literal
-                    Get-ChildItem -LiteralPath $f.DirectoryName | Where-Object { $_.FullName -like "$base*" } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue
+                    # On supprime tous les fichiers lies en filtrant sur le chemin complet literal (evite les erreurs de wildcard [ ])
+                    Get-ChildItem -LiteralPath $f.DirectoryName | Where-Object { $_.FullName.StartsWith($base) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue
                     $corruptedCount++; $needDownload = $true
                 }
             }
@@ -531,7 +531,7 @@ function Repair-Packs {
                 Remove-Item -LiteralPath $f.FullName -Force; $corruptedCount++
                 # On supprime aussi le RAW correspondant pour forcer le retraitement
                 $id = if ($f.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $Matches[1] }
-                if ($id) { Get-ChildItem -LiteralPath $rawDir | Where-Object { $_.Name -like "*$id*" } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue }
+                if ($id) { Get-ChildItem -LiteralPath $rawDir | Where-Object { $_.Name.Contains($id) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue }
             }
         }
     }
