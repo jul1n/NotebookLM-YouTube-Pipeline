@@ -1,34 +1,26 @@
-# 📺 Industrial YouTube Transcription Pipeline v9.5
+# 📺 Industrial YouTube Transcription Pipeline v10.1
 
 Ecosystème complet pour la récupération, le filtrage et la préparation massive de données YouTube pour **NotebookLM**.
 
-## 🚀 Fonctionnalités Principales
+## 🚀 Fonctionnalités Principales (v10.1)
 
-- **Multi-Channel Batch Processing** : Synchronisation et traitement de 50+ chaînes simultanément.
-- **Intelligent Subtitle Extraction** : Gestion des sous-titres natifs, automatiques et traductions avec mode `auto` (EN/FR).
-- **Industrial Packaging** : Fusion des transcriptions en "Packs" optimisés de 500k mots pour NotebookLM.
-- **Robustesse Anti-429** : Gestion des limitations YouTube avec délais dynamiques, cookies-from-browser et retry logic.
-- **Diagnostic de Langue** : Filtrage automatique des vidéos en langues indésirables (Hindi, Espagnol, etc.).
-- **Workflow de Re-Subtitling** : Génération de vidéos "pseudo-statiques" (1fps) pour forcer la génération de sous-titres sur les vidéos qui n'en ont pas.
+- **Unified Suite** : Le pipeline, le diagnostic de langue et le workflow de re-subtitling sont désormais fusionnés dans un script unique.
+- **Parallel Processing** : Traitement multi-threadé (8 threads) pour le nettoyage du texte et la génération des packs.
+- **Robust Pathing** : Support total des caractères spéciaux YouTube (crochets, emojis) via `-LiteralPath`.
+- **UI/UX Refinement** : Interface épurée avec synthèse des blacklists et headers de progression clairs.
+- **Industrial Packaging** : Fusion des transcriptions en "Packs" optimisés pour NotebookLM.
+- **Diagnostic de Langue** : Filtrage automatique intégré.
 
-## 🛠 Les Outils de la Suite
+## 🛠 L'Outil Central
 
-### 1. `pipeline_v9.ps1` (Le Cœur)
-Le chef d'orchestre qui gère la synchronisation des chaînes, la conversion des sous-titres en texte brut, et la génération des packs finaux dans `ALL_PACKS`.
-- **Mode 1 & 2** : Ajout et rafraîchissement complet.
-- **Mode 3 (Rapide)** : Ne traite que les échecs précédents.
-- **Mode 4 (Diagnostic)** : Répare les fichiers texte corrompus.
+### `Industrial_Pipeline_v10.ps1` (v10.1)
+Le chef d'orchestre qui gère tout le workflow, de la détection sur YouTube à la génération des packs finaux dans `ALL_PACKS`.
 
-### 2. `check_languages.ps1` (Le Filtre)
-Outil de diagnostic qui scanne les vidéos en échec et identifie leur langue réelle. 
-- Blackliste automatiquement tout ce qui n'est pas `fr` ou `en`.
-- Évite de solliciter inutilement YouTube pour des contenus hors-sujet.
-
-### 3. `re_subtitler.ps1` (La Seconde Chance)
-Traite les vidéos de la blacklist sans sous-titres exploitables.
-- Extrait l'audio (MP3).
-- Combine l'audio avec la vignette pour créer une vidéo légère de 1fps.
-- Marque les vidéos pour l'upload afin de récupérer de nouveaux sous-titres automatiques.
+- **Options 1-3** : Synchronisation (Manuelle, Auto, Rapide).
+- **Option 4** : Diagnostic global de LANGUE (Filtre le Hindi, Espagnol, etc.).
+- **Option 5** : Workflow RE-SUBTITLING (Vidéos 1fps pour forcer les sous-titres).
+- **Option 6** : Maintenance GLOBALE (Migration, Intégrité, Doublons, Packs).
+- **Option 7** : Inventaire Global (CSV).
 
 ## 📦 Installation & Configuration
 
