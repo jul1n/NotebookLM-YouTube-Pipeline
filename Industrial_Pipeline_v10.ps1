@@ -419,11 +419,18 @@ function Process-LocalFiles {
         if ($subFile) {
             try {
                 $content = Get-Content -LiteralPath $subFile -Raw
-                $txt = $content -replace '<.*?>', '' # Tags
+                # Nettoyage ultra-agressif des VTT et artifacts
+                $txt = $content
+                $txt = $txt -replace '(?s)<.*?>', '' # Tags HTML/VTT
+                $txt = $txt -replace 'WEBVTT|Kind: captions|Language: \S+', '' # Headers
+                
+                # Suppression globale des timestamps (meme au milieu d'une ligne)
+                $tsRegex = '\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}\s+-->\s+\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}'
+                $txt = $txt -replace $tsRegex, ''
+                
+                # Suppression des infos de positionnement et meta-data VTT
+                $txt = $txt -replace 'align:\S+|position:\S+|line:\S+|size:\S+|region:\S+', ''
                 $txt = $txt -replace '(?m)^\d+\s*$', '' # Index
-                $txt = $txt -replace '(?m)^.*?\d{1,2}:\d{2}:\d{2}.*?$', '' # Timestamps HH:mm:ss
-                $txt = $txt -replace '(?m)^.*?\d{1,2}:\d{2}\.\d{3}.*?$', '' # Timestamps mm:ss.ms
-                $txt = $txt -replace '(?m)^.*?-->.*?$', '' # Ligne avec fleche
                 $txt = $txt -replace '(?m)^\s*$', '' # Lignes vides
                 
                 $lines = $txt -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
@@ -560,9 +567,18 @@ function Repair-Packs {
         foreach ($f in $files) {
             $content = [System.IO.File]::ReadAllText($f.FullName)
             # Detection de fuite JSON : si on trouve des cles JSON en dehors du bloc METADATA
-            $textContent = if ($content -match "\[/METADATA.*?\]`r?`n`r?`n(.*)") { $Matches[1] } else { $content }
+            $textContent = if ($content -match "\[/METADATA.*?\](?:\r?\n){2}(.*)") { $Matches[1] } else { $content }
+            
+            $isDirty = $false
+            $reason = ""
             if ($textContent -match '"formats":' -or $textContent -match '"url":' -or $textContent -match '"downloader_options":') {
-                Write-Host "    [!] Fuite JSON dans le texte : $($f.Name)" -ForegroundColor Red
+                $isDirty = $true; $reason = "Fuite JSON"
+            } elseif ($textContent -match '-->') {
+                $isDirty = $true; $reason = "Artifacts VTT (Timestamps)"
+            }
+
+            if ($isDirty) {
+                Write-Host "    [!] $reason dans le texte : $($f.Name)" -ForegroundColor Red
                 Remove-Item -LiteralPath $f.FullName -Force; $corruptedCount++
                 # On supprime aussi le RAW correspondant pour forcer le retraitement
                 $id = if ($f.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $Matches[1] }
