@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.2
+# Industrial YouTube Transcription Pipeline v10.3
 # Unified Industrial Suite for NotebookLM
-# v10.2: UI polish (removed > prefix), fixed wildcard bracket bugs.
+# v10.3: Pack verification module with word count color-coding.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -650,6 +650,38 @@ function Maintenance-Migration($channels) {
     return $false
 }
 
+function Review-GlobalPacks($GlobalPacksDir) {
+    if (!(Test-Path -LiteralPath $GlobalPacksDir)) { 
+        Write-Host "  [!] Dossier global ALL_PACKS introuvable." -ForegroundColor Yellow
+        return 
+    }
+    
+    $packs = Get-ChildItem -LiteralPath $GlobalPacksDir -Filter "*.txt" | Where-Object { $_.Name -notmatch "^_" } | Sort-Object Name
+    if ($packs.Count -eq 0) { Write-Host "  [!] Aucun pack detecte dans ALL_PACKS." -ForegroundColor Gray; return }
+    
+    Write-Host "`n  📊  BILAN DES PACKS GENERES" -ForegroundColor Cyan
+    Write-Host "  " + ("═" * 60) -ForegroundColor Cyan
+    Write-Host "  Pack Name".PadRight(45) + "Words".PadLeft(12) -ForegroundColor Gray
+    
+    $totalWords = 0
+    foreach ($p in $packs) {
+        # Lecture securisee pour eviter les erreurs d'encodage
+        $content = [System.IO.File]::ReadAllText($p.FullName)
+        $words = ($content -split "\s+" | Where-Object { $_ -ne "" }).Count
+        $totalWords += $words
+        
+        # NotebookLM a une limite de 500k mots. 
+        # Vert si < 500k (Optimal), Orange si >= 500k (Risque de coupure)
+        $color = if ($words -ge 500000) { "Yellow" } else { "Green" }
+        $shortName = if ($p.Name.Length -gt 42) { $p.Name.Substring(0, 39) + "..." } else { $p.Name }
+        
+        Write-Host "  $($shortName.PadRight(45))" -NoNewline -ForegroundColor White
+        Write-Host " $($words.ToString('N0').PadLeft(11))" -ForegroundColor $color
+    }
+    Write-Host "  " + ("═" * 60) -ForegroundColor Cyan
+    Write-Host "  TOTAL : $($totalWords.ToString('N0')) mots dans $($packs.Count) packs." -ForegroundColor Gray
+}
+
 function Clean-GlobalPacks {
     param ($GlobalPacksDir, $ValidPrefixes)
     if (!(Test-Path -LiteralPath $GlobalPacksDir)) { return }
@@ -1003,7 +1035,7 @@ while ($true) {
         Write-Host "  ║          Maintenance globale du pipeline     ║" -ForegroundColor White
         Write-Host "  ╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
         
-        $steps = @("Migration", "Integrite", "Doublons", "Packs", "Langues")
+        $steps = @("Migration", "Integrite", "Doublons", "Packs", "Langues", "Verification")
         $totalSteps = $steps.Count
 
         $doMigration = (Read-Host "  [1/$totalSteps] Lancer la migration ? [O/N] (Défaut: N)").ToUpper() -eq "O"
@@ -1011,6 +1043,7 @@ while ($true) {
         $doDoublons  = (Read-Host "  [3/$totalSteps] Lancer le nettoyage des doublons ? [O/N] (Défaut: O)").ToUpper() -ne "N"
         $doPacks     = (Read-Host "  [4/$totalSteps] Lancer la reconstruction des packs ? [O/N] (Défaut: O)").ToUpper() -ne "N"
         $doLangues   = (Read-Host "  [5/$totalSteps] Lancer le filtrage des langues ? [O/N] (Défaut: N)").ToUpper() -eq "O"
+        $doReview    = (Read-Host "  [6/$totalSteps] Lancer la vérification finale des packs ? [O/N] (Défaut: O)").ToUpper() -ne "N"
 
         # Etape 1: Migration
         if ($doMigration) {
@@ -1060,6 +1093,12 @@ while ($true) {
             }
         }
         
+        # Etape 6: Verification Finale
+        if ($doReview) {
+            Write-StepHeader -Title "Bilan et Verification des Packs" -StepNum 6 -TotalSteps $totalSteps -Emoji "📊"
+            Review-GlobalPacks -GlobalPacksDir $AllPacksDir
+        }
+
         Write-Host "`n  [SUCCES] Maintenance Globale Terminee." -ForegroundColor Green
     }
     elseif ($choice -eq "7") { Export-MasterInventory }
