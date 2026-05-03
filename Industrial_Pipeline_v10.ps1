@@ -648,21 +648,37 @@ function Clean-GlobalPacks {
 # ==============================================================================
 
 function Run-LanguageDiagnostic {
-    Write-Host "`n=================================================" -ForegroundColor Cyan
-    Write-Host "   DIAGNOSTIC DE LANGUE ET FILTRAGE AUTO" -ForegroundColor Cyan
-    Write-Host "=================================================" -ForegroundColor Cyan
+    param ($SpecificChannelDir = $null)
+    
+    if (!$SpecificChannelDir) {
+        Write-Host "`n=================================================" -ForegroundColor Cyan
+        Write-Host "   DIAGNOSTIC DE LANGUE ET FILTRAGE AUTO" -ForegroundColor Cyan
+        Write-Host "=================================================" -ForegroundColor Cyan
+    }
     
     $idsToCheck = [System.Collections.Generic.HashSet[string]]::new()
-    $log429 = Join-Path $LogsDir "429_errors.txt"
-    if (Test-Path -LiteralPath $log429) { foreach ($line in Get-Content -LiteralPath $log429) { if ($line -match "^([a-zA-Z0-9_-]{11})") { [void]$idsToCheck.Add($Matches[1]) } } }
-    foreach ($f in Get-ChildItem -LiteralPath $BaseDir -Recurse -Filter "missing_videos.txt") { foreach ($id in Get-Content -LiteralPath $f.FullName) { if ($id -match "^[a-zA-Z0-9_-]{11}$") { [void]$idsToCheck.Add($id) } } }
+    
+    if ($SpecificChannelDir) {
+        $missingPath = Join-Path $SpecificChannelDir "missing_videos.txt"
+        if (Test-Path -LiteralPath $missingPath) {
+            foreach ($id in Get-Content -LiteralPath $missingPath) {
+                if ($id -match "^[a-zA-Z0-9_-]{11}$") { [void]$idsToCheck.Add($id) }
+            }
+        }
+    } else {
+        $log429 = Join-Path $LogsDir "429_errors.txt"
+        if (Test-Path -LiteralPath $log429) { foreach ($line in Get-Content -LiteralPath $log429) { if ($line -match "^([a-zA-Z0-9_-]{11})") { [void]$idsToCheck.Add($Matches[1]) } } }
+        foreach ($f in Get-ChildItem -LiteralPath $BaseDir -Recurse -Filter "missing_videos.txt") { foreach ($id in Get-Content -LiteralPath $f.FullName) { if ($id -match "^[a-zA-Z0-9_-]{11}$") { [void]$idsToCheck.Add($id) } } }
+    }
+
+    if ($idsToCheck.Count -eq 0) { return }
 
     $currentBL = Get-Content -LiteralPath $BlacklistPath
-    $count = 0; $total = $idsToCheck.Count
     $idsToProcess = $idsToCheck | Where-Object { $currentBL -notmatch [regex]::Escape($_) }
+    
     $idsToProcess | ForEach-Object -Parallel {
         $id = $_
-        $userAgent = $using:userAgent
+        $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         $YtDlp = $using:YtDlp
         $BlacklistPath = $using:BlacklistPath
         
@@ -670,11 +686,9 @@ function Run-LanguageDiagnostic {
             $info = & $YtDlp --user-agent $userAgent --print "%(language)s|%(title)s" --no-warnings "https://www.youtube.com/watch?v=$id" 2>$null
             if ($info) {
                 $parts = $info -split '\|'; $lang = $parts[0]; $title = $parts[1]
-                    if ($lang -and !($lang.StartsWith("fr") -or $lang.StartsWith("en"))) {
-                        Write-Host "  [REJECT] $id ($lang) - $title" -ForegroundColor Red
-                        "$id # [AUTO-LANG: $lang] $title" | Add-Content -LiteralPath $BlacklistPath -Encoding utf8
-                    } else {
-                    Write-Host "  [KEEP] $id ($lang)" -ForegroundColor Green
+                if ($lang -and !($lang.StartsWith("fr") -or $lang.StartsWith("en"))) {
+                    Write-Host "      [REJECT] $id ($lang) - $title" -ForegroundColor Red
+                    "$id # [AUTO-LANG: $lang] $title" | Add-Content -LiteralPath $BlacklistPath -Encoding utf8
                 }
             }
         } catch { }
@@ -1009,13 +1023,14 @@ while ($true) {
                 $null = Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $c.Lang -Prefix $c.Prefixe
                 $null = Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $c.Prefixe -LogPrefix $c.Prefixe -GlobalPacksDir $AllPacksDir
             }
+
+            # Etape 5: Langue
+            if ($doLangues) {
+                Write-SubStep -Title "LANGUES" -StepNum 5 -TotalSteps $totalSteps -Emoji "🧪"
+                Run-LanguageDiagnostic -SpecificChannelDir $cDir
+            }
         }
         
-        # Etape 5: Langue
-        if ($doLangues) {
-            Write-StepHeader -Title "Diagnostic global de LANGUE" -StepNum 5 -TotalSteps $totalSteps -Emoji "🧪"
-            Run-LanguageDiagnostic
-        }
         Write-Host "`n  [SUCCES] Maintenance Globale Terminee." -ForegroundColor Green
     }
     elseif ($choice -eq "7") { Export-MasterInventory }
