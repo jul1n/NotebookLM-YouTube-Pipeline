@@ -130,7 +130,7 @@ function Fix-Mojibake {
     $txt = $txt.Replace($c226 + $c8364 + $c8482, "'")
     # â€œ (E2 80 9C)
     $txt = $txt.Replace($c226 + $c8364 + $c339, '"')
-    # â€ (E2 80 9D)
+    # â€  (E2 80 9D)
     $txt = $txt.Replace($c226 + $c8364 + $c157, '"')
     # â€  (E2 80 20)
     $txt = $txt.Replace($c226 + $c8364 + " ", '"')
@@ -399,7 +399,8 @@ function Sync-YouTube {
         foreach ($json in $jsonFiles) {
             $baseName = $json.Name -replace '\.info\.json$', ''
             $found = $false
-            foreach($suffix in @("", ".$Lang")) {
+            $checkSuffixes = if ($Lang -eq "auto") { @(".fr", ".en", "") } else { @(".$Lang", "") }
+            foreach($suffix in $checkSuffixes) {
                 if ($rawFileMap.Contains($baseName + $suffix + ".srt") -or $rawFileMap.Contains($baseName + $suffix + ".vtt")) {
                     $found = $true; break
                 }
@@ -414,7 +415,7 @@ function Sync-YouTube {
                 } catch { }
             }
         }
-        Write-Host "[$LogPrefix] Scan local termine." -ForegroundColor Gray
+        Write-Host "[$LogPrefix] Scan local termine (Present: $($localIds.Count) | Blacklist: $ignoredByBlacklist | A telecharger: $(($masterIds | Where-Object { $_ -notin $localIds }).Count))." -ForegroundColor Gray
 
         $toDownload = [System.Collections.Generic.List[string]]::new()
         foreach ($mid in $masterIds) { 
@@ -422,9 +423,14 @@ function Sync-YouTube {
         }
         $toDownload | Out-File -LiteralPath $missingListPath -Encoding utf8
     } else {
-        $toDownload = [System.Collections.Generic.List[string]]::new($masterIds)
+        # Mode RetryOnly : On utilise masterIds (qui vient de missing_videos.txt)
+        if ($null -eq $masterIds -or $masterIds.Count -eq 0) {
+            $toDownload = [System.Collections.Generic.List[string]]::new()
+        } else {
+            $toDownload = [System.Collections.Generic.List[string]]::new([string[]]$masterIds)
+        }
     }
-
+    
     if ($toDownload.Count -gt 0) {
         Write-Log "$($toDownload.Count) videos manquantes a telecharger." "Yellow" $LogPrefix
         
@@ -450,7 +456,7 @@ function Sync-YouTube {
                 & $YtDlp --user-agent $userAgent @Cookies `
                     --ffmpeg-location $Ffmpeg `
                     --write-auto-sub --write-info-json `
-                    --sub-langs ($Lang -eq "auto" ? "fr,en" : $Lang) --skip-download --convert-subs srt `
+                    --sub-langs ($Lang -eq "auto" ? "fr,en" : $Lang) --skip-download --convert-subs srt --ignore-errors `
                     --min-sleep-interval 10 --max-sleep-interval 40 --sleep-requests 1 `
                     --download-archive (Join-Path $BaseDir "archive.txt") `
                     -o (Join-Path $RawDir "%(upload_date)s - %(title)s [%(id)s].%(ext)s") $vidUrl 2>&1
@@ -464,7 +470,11 @@ function Sync-YouTube {
                     $noSubsFound = $true
                 } elseif ($line -match "Writing video metadata as JSON to: .*\\(\d{8} - .*)\.info\.json") {
                     $currentTitle = $Matches[1]
-                } elseif ($line -match "(?i)(Writing video subtitles to|Destination): .*1_RAW\\\d{8} - (.*)\.$Lang\.(vtt|srt)") {
+                } elseif ($line -match "(?i)ERROR: (.*)") {
+                    Write-Host "  [!] $($Matches[0])" -ForegroundColor Red
+                } elseif ($line -match "(?i)WARNING: (.*)") {
+                    Write-Host "  [!] $($Matches[0])" -ForegroundColor Yellow
+                } elseif ($line -match "(?i)(Writing video subtitles to|Destination): .*1_RAW\\\d{8} - (.*)\.(.*?)\.(vtt|srt)") {
                     $title = $Matches[2]
                     $idx = $line.IndexOf($title)
                     if ($idx -ge 0) {
@@ -473,8 +483,6 @@ function Sync-YouTube {
                         Write-Host $title -NoNewline -ForegroundColor Green
                         Write-Host $line.Substring($idx + $title.Length) -ForegroundColor Gray
                     }
-                } elseif ($line -match "(?i)Extracting cookies") {
-                    # Ignore
                 } else {
                     Write-Host "  $line" -ForegroundColor DarkGray
                 }
@@ -492,7 +500,16 @@ function Sync-YouTube {
                 $toDownload | Out-File -LiteralPath $missingListPath -Encoding utf8
             } else {
                 $errorCount++
-                Write-Log "Echec de telechargement sur $id ($errorCount/3)" "Red" $LogPrefix
+                $errorMsg = "Echec de telechargement sur $id ($errorCount/3)"
+                if ($res -match "429") {
+                    $errorMsg += " [HTTP 429: Too Many Requests]"
+                    # Log centralise pour le script de diagnostic de langue
+                    $logDir = Join-Path $BaseDir "_LOGS"
+                    if (!(Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+                    $log429 = Join-Path $logDir "429_errors.txt"
+                    "$id | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | $LogPrefix" | Add-Content -Path $log429
+                }
+                Write-Log $errorMsg "Red" $LogPrefix
                 if ($errorCount -ge 3) {
                     Write-Log "3 echecs consecutifs. Pause de 15 minutes..." "Yellow" $LogPrefix
                     Start-Sleep -Seconds 900
@@ -504,6 +521,7 @@ function Sync-YouTube {
     } else {
         Write-Log "Aucune video manquante." "Green" $LogPrefix
     }
+    return $ignoredByBlacklist
 }
 
 function Build-Packs {
@@ -624,6 +642,30 @@ function Repair-Packs {
     return 0
 }
 
+function Clean-GlobalPacks {
+    param ($GlobalPacksDir, $ValidPrefixes)
+    
+    if (!(Test-Path $GlobalPacksDir)) { return }
+    
+    Write-Host "`n[SYSTEME] Nettoyage du dossier global ALL_PACKS..." -ForegroundColor Gray
+    
+    # 1. Reparation des artefacts JSON dans le dossier global
+    $repaired = Repair-Packs -BaseDir $GlobalPacksDir -Prefix "GLOBAL"
+    
+    # 2. Identification des orphelins (prefixe inconnu)
+    $files = Get-ChildItem -Path $GlobalPacksDir -Filter "*.txt"
+    $deprecatedDir = Join-Path $GlobalPacksDir "_OLD_OR_DEPRECATED"
+    
+    foreach ($f in $files) {
+        $prefix = ($f.Name -split "_")[0]
+        if ($ValidPrefixes -notcontains $prefix -and $f.Name -notmatch "^_") {
+            if (!(Test-Path $deprecatedDir)) { New-Item -ItemType Directory -Path $deprecatedDir | Out-Null }
+            Move-Item -LiteralPath $f.FullName -Destination $deprecatedDir -Force
+            Write-Host "  > Archive pack orphelin : $($f.Name)" -ForegroundColor DarkGray
+        }
+    }
+}
+
 # ==============================================================================
 # EXECUTION BATCH
 # ==============================================================================
@@ -633,6 +675,10 @@ $globalStats = @{
     Processed = 0; Failed = 0
 }
 $missingReportList = @()
+
+# Nettoyage global avant de commencer
+$validPrefixes = $channelsToProcess | ForEach-Object { $_.Prefix }
+Clean-GlobalPacks -GlobalPacksDir $allPacksDir -ValidPrefixes $validPrefixes
 
 foreach ($chan in $channelsToProcess) {
     Write-Host "`n=================================================================" -ForegroundColor Magenta
@@ -690,7 +736,7 @@ foreach ($chan in $channelsToProcess) {
         $newDense2 = 0
     } elseif ($syncChoice -eq "O" -or $syncChoice -eq "o" -or $mode -eq "3") {
         Write-Log "Synchronisation YouTube (Mode $($mode))..." "Cyan" $logPrefix
-        Sync-YouTube -Url $chan.URL -RawDir $p1_Raw -YtDlp $ytDlp -Ffmpeg $ffmpegPath -Cookies $cookieArgsBase -Lang $chan.Lang -BaseDir $baseDir -LogPrefix $logPrefix -BlacklistPath $blacklistPath -RetryOnly ($mode -eq "3")
+        $chanIgnored = Sync-YouTube -Url $chan.URL -RawDir $p1_Raw -YtDlp $ytDlp -Ffmpeg $ffmpegPath -Cookies $cookieArgsBase -Lang $chan.Lang -BaseDir $baseDir -LogPrefix $logPrefix -BlacklistPath $blacklistPath -RetryOnly ($mode -eq "3")
         
         Write-Log "Traitement des fichiers..." "Cyan" $logPrefix
         $newDense2 = Process-LocalFiles -RawDir $p1_Raw -TxtDir $p2_Txt -DenseDir $p3_Dense -Lang $chan.Lang -Prefix $logPrefix
@@ -728,11 +774,34 @@ foreach ($chan in $channelsToProcess) {
     Write-Host "=================================================" -ForegroundColor Cyan
     $chanMaster = if (Test-Path $masterListPath) { (Get-Content $masterListPath | Where-Object { $_ -ne "" }).Count } else { 0 }
     $chanMissing = if (Test-Path $missingListPath) { (Get-Content $missingListPath | Where-Object { $_ -ne "" }).Count } else { 0 }
-    Write-Host "Videos sur la chaine (Cache) : $chanMaster"
-    Write-Host "Fichiers bruts (RAW)         : $((Get-ChildItem -LiteralPath $p1_Raw -Include "*.srt", "*.vtt" -Recurse).Count)"
-    Write-Host "Fichiers texte (TXT)         : $((Get-ChildItem -LiteralPath $p2_Txt -Filter "*.txt").Count)"
-    Write-Host "Fichiers denses (DENSE)      : $((Get-ChildItem -LiteralPath $p3_Dense -Filter "*.txt").Count)"
-    Write-Host "Fichiers packs generes       : $((Get-ChildItem -LiteralPath $p4_Packs -Filter "*.txt").Count)"
+    $chanRaw = (Get-ChildItem -LiteralPath $p1_Raw -Filter "*.info.json").Count
+    
+    # Analyse de la blacklist pour cette chaine
+    $chanMasterIds = if (Test-Path $masterListPath) { Get-Content $masterListPath } else { @() }
+    $blContent = Get-Content $blacklistPath
+    $chanBL_All = @($blContent | Where-Object { $chanMasterIds -contains ($_ -split " #")[0] })
+    $blNoSubs = ($chanBL_All | Where-Object { $_ -match "Aucun sous-titre|no subtitles" }).Count
+    $blPremium = ($chanBL_All | Where-Object { $_ -match "MEMBERS-ONLY|subscriber_only" }).Count
+    $blLang = ($chanBL_All | Where-Object { $_ -match "LANG:" }).Count
+    $blOthers = $chanBL_All.Count - ($blNoSubs + $blPremium + $blLang)
+
+    Write-Host "Videos sur la chaine (Total) : $chanMaster"
+    Write-Host "-------------------------------------------------"
+    Write-Host "Statut de la collection :"
+    Write-Host "  > Pretes (RAW)             : $chanRaw" -ForegroundColor Green
+    Write-Host "  > Ignorees (Blacklist)     : $($chanBL_All.Count)" -ForegroundColor Gray
+    if ($chanBL_All.Count -gt 0) {
+        if ($blNoSubs)  { Write-Host "    - Dont sans sous-titres : $blNoSubs" -ForegroundColor DarkGray }
+        if ($blPremium) { Write-Host "    - Dont Premium/Members  : $blPremium" -ForegroundColor DarkGray }
+        if ($blLang)    { Write-Host "    - Dont Langue etrangere : $blLang" -ForegroundColor DarkGray }
+        if ($blOthers -gt 0) { Write-Host "    - Dont autres motifs    : $blOthers" -ForegroundColor DarkGray }
+    }
+    Write-Host "  > En attente (Echecs)      : $chanMissing" -ForegroundColor ($chanMissing -gt 0 ? "Red" : "Gray")
+    Write-Host "-------------------------------------------------"
+    Write-Host "Details techniques :"
+    Write-Host "  > Fichiers texte (TXT)      : $((Get-ChildItem -LiteralPath $p2_Txt -Filter "*.txt").Count)"
+    Write-Host "  > Fichiers denses (DENSE)   : $((Get-ChildItem -LiteralPath $p3_Dense -Filter "*.txt").Count)"
+    Write-Host "  > Fichiers packs generes    : $((Get-ChildItem -LiteralPath $p4_Packs -Filter "*.txt").Count)"
     Write-Host "-------------------------------------------------" -ForegroundColor Cyan
     if ($chanMissing -gt 0) {
         Write-Host "Statut : $chanMissing video(s) manquante(s) (voir missing_videos.txt dans le dossier chaine)" -ForegroundColor Red
