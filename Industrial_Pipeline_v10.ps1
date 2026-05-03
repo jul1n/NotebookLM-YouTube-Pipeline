@@ -511,7 +511,8 @@ function Repair-Packs {
                     $content = Get-Content -LiteralPath $f.FullName -Raw -ErrorAction Stop
                     $null = $content | ConvertFrom-Json -ErrorAction Stop
                 } catch {
-                    Write-Host "  [!] JSON corrompu : $($f.Name)" -ForegroundColor Red
+                    $reason = $_.Exception.Message
+                    Write-Host "    [!] JSON corrompu : $($f.Name) ($reason)" -ForegroundColor Red
                     $base = $f.FullName -replace '\.info\.json$', ''
                     # On supprime tous les fichiers lies en filtrant sur le chemin complet literal (evite les erreurs de wildcard [ ])
                     Get-ChildItem -LiteralPath $f.DirectoryName | Where-Object { $_.FullName.StartsWith($base) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue
