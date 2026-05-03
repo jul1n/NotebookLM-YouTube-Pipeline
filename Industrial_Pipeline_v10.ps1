@@ -59,11 +59,10 @@ $blacklistCandidates = [System.Collections.Generic.List[PSObject]]::new()
 
 function Write-Log {
     param ($msg, $color = "White", $prefix = "SYSTEM")
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $timestamp = Get-Date -Format "HH:mm:ss"
     $logMsg = "[$timestamp] [$prefix] $msg"
     $logFile = Join-Path $LogsDir "pipeline.log"
     
-    # Retry logic pour le log global (multi-instance)
     $success = $false; $attempts = 0
     while (-not $success -and $attempts -lt 5) {
         try {
@@ -73,9 +72,9 @@ function Write-Log {
         } catch { Start-Sleep -Milliseconds 200 }
     }
 
-    # On ne filtre QUE l'affichage terminal, on garde tout dans le log
     if ($msg -notmatch "\[download\]\s+\d+\.\d+%" -and $msg -notmatch "\[download\]\s+\d+\s+of") {
-        Write-Host "[$timestamp] [$prefix] " -NoNewline -ForegroundColor Gray
+        Write-Host "[$timestamp] " -NoNewline -ForegroundColor DarkGray
+        Write-Host "[$prefix] " -NoNewline -ForegroundColor Gray
         Write-Host $msg -ForegroundColor $color
     }
 }
@@ -554,25 +553,26 @@ function Export-MasterInventory {
 
 while ($true) {
     Clear-Host
-    Write-Host "=================================================" -ForegroundColor Magenta
-    Write-Host "      INDUSTRIAL PIPELINE v10.0 UNIFIED" -ForegroundColor White
-    Write-Host "=================================================" -ForegroundColor Magenta
-    Write-Host "1. Ajouter et traiter une chaine (Manuel)"
-    Write-Host "2. Rafraichir toutes les chaines (Auto)"
-    Write-Host "3. Retenter uniquement les echecs (Rapide)"
-    Write-Host "4. Reparer les artefacts JSON (Diagnostic)"
-    Write-Host "5. Lancer le diagnostic de LANGUE (Filtrage)"
-    Write-Host "6. Lancer le workflow RE-SUBTITLING (Videos 1fps)"
-    Write-Host "7. Maintenance GLOBALE (Nettoyage + Diagnostic)"
-    Write-Host "8. Generer l'INVENTAIRE GLOBAL (Fichier CSV)"
-    Write-Host "9. PARAMETRES (Cookies, Delais, etc.)"
-    Write-Host "0. Quitter"
-    Write-Host "-------------------------------------------------"
+    Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
+    Write-Host "  ║             INDUSTRIAL PIPELINE v10.0 UNIFIED            ║" -ForegroundColor White
+    Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
+    Write-Host "  1. Ajouter et traiter une chaine (Manuel)"
+    Write-Host "  2. Rafraichir toutes les chaines (Auto)"
+    Write-Host "  3. Retenter uniquement les echecs (Rapide)"
+    Write-Host "  4. Reparer les fichiers corrompus (Diagnostic)"
+    Write-Host "  5. Lancer le diagnostic de LANGUE (Filtrage)"
+    Write-Host "  6. Lancer le workflow RE-SUBTITLING (Videos 1fps)"
+    Write-Host "  7. Maintenance GLOBALE (Nettoyage + Diagnostic)"
+    Write-Host "  8. Generer l'INVENTAIRE GLOBAL (Fichier CSV)"
+    Write-Host "  9. PARAMETRES (Cookies, Delais, etc.)"
+    Write-Host "  0. Quitter"
+    Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Gray
     
     $choice = ""
     while ($choice -notmatch "^[0-9]$") {
-        $choice = Read-Host "Votre choix"
-        if ($choice -notmatch "^[0-9]$") { Write-Host "[!] Choix invalide. Tapez un chiffre entre 0 et 9." -ForegroundColor Red }
+        Write-Host "  Votre choix: " -NoNewline -ForegroundColor Cyan
+        $choice = Read-Host
+        if ($choice -notmatch "^[0-9]$") { Write-Host "  [!] Choix invalide." -ForegroundColor Red }
     }
 
     if ($choice -eq "0") { break }
@@ -582,17 +582,19 @@ while ($true) {
     
     if ($choice -eq "9") {
         Clear-Host
-        Write-Host "=== PARAMETRES DU PIPELINE ===" -ForegroundColor Cyan
-        Write-Host "1. Source des Cookies (Actuel: $($global:Settings.CookieSource))"
-        Write-Host "2. Limite de scan playlist (Actuel: $($global:Settings.MaxPlaylistEnd))"
-        Write-Host "0. Retour"
-        $sChoice = Read-Host "Modifier quel parametre ?"
+        Write-Host "  ╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "  ║           PARAMETRES DU PIPELINE             ║" -ForegroundColor White
+        Write-Host "  ╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host "  1. Source des Cookies (Actuel: $($global:Settings.CookieSource))"
+        Write-Host "  2. Limite de scan playlist (Actuel: $($global:Settings.MaxPlaylistEnd))"
+        Write-Host "  0. Retour"
+        $sChoice = Read-Host "  Modifier quel parametre ?"
         if ($sChoice -eq "1") {
-            Write-Host "Sources valides: firefox, chrome, edge, txt, none"
-            $newC = Read-Host "Nouvelle source"
+            Write-Host "  Sources: firefox, chrome, edge, txt, none"
+            $newC = Read-Host "  Nouvelle source"
             if ($newC -match "firefox|chrome|edge|txt|none") { $global:Settings.CookieSource = $newC; Save-Settings }
         } elseif ($sChoice -eq "2") {
-            $newL = Read-Host "Nouvelle limite (ex: 2000)"
+            $newL = Read-Host "  Nouvelle limite"
             if ($newL -match "^\d+$") { $global:Settings.MaxPlaylistEnd = [int]$newL; Save-Settings }
         }
         continue
@@ -601,53 +603,55 @@ while ($true) {
     if ($choice -match "[12347]") {
         $mode = if ($choice -eq "7") { "3" } else { $choice }
         $targets = if ($choice -eq "1") { 
-            $url = ""; while ($url -notmatch "youtube\.com") { $url = Read-Host "URL de la chaine (doit contenir youtube.com)"; if ($url -notmatch "youtube\.com") { Write-Host "[!] URL invalide." -ForegroundColor Red } }
-            $pref = ""; while ($pref -eq "") { $pref = Read-Host "Prefixe (ex: Oussama)"; if ($pref -eq "") { Write-Host "[!] Le prefixe ne peut pas etre vide." -ForegroundColor Red } }
+            $url = ""; while ($url -notmatch "youtube\.com") { $url = Read-Host "  URL de la chaine"; if ($url -notmatch "youtube\.com") { Write-Host "  [!] URL invalide." -ForegroundColor Red } }
+            $pref = ""; while ($pref -eq "") { $pref = Read-Host "  Prefixe (ex: Oussama)"; if ($pref -eq "") { Write-Host "  [!] Vide interdit." -ForegroundColor Red } }
             @([PSCustomObject]@{ URL=$url; Prefixe=$pref; Lang="auto" })
         } else { $channels }
 
         # Cleanup before start
         $validPrefixes = $channels | ForEach-Object { $_.Prefixe }
-        Clean-GlobalPacks -GlobalPacksDir $AllPacksDir -ValidPrefixes $validPrefixes
+        Clean-GlobalPacks -GlobalPacksDir $AllPacksDir -ValidPrefixes $validPrefixes | Out-Null
         
         foreach ($chan in $targets) {
             $folder = ($chan.Prefixe -replace "[^a-zA-Z0-9]", "_").Trim()
             $cDir = Join-Path $BaseDir $folder
             
-            # On cree le dossier de base s'il n'existe pas encore (pour pouvoir poser le verrou)
+            # Creation du dossier si absent (pour le verrou)
             if (!(Test-Path -LiteralPath $cDir)) { New-Item -ItemType Directory -Force -Path $cDir | Out-Null }
             
             $lockFile = Join-Path $cDir "process.lock"
 
-            # Securite Multi-Instance : On verifie si la chaine est deja en cours de traitement
             if (Test-Path $lockFile) {
-                Write-Host "`n>>> CHAINE : $($chan.Prefixe) [OCCUPEE - SAUT]" -ForegroundColor Yellow
+                Write-Host "`n  [BUSY] Skip: $($chan.Prefixe)" -ForegroundColor Yellow
                 continue
             }
             
             try {
-                # On pose le verrou
                 $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
                 "Instance locked at $timestamp" | Out-File $lockFile
                 
-                Write-Host "`n>>> CHAINE : $($chan.URL)" -ForegroundColor Cyan
+                Write-Host "`n  ─── SYNC : $($chan.Prefixe) ───" -ForegroundColor Cyan
                 $p1 = Join-Path $cDir "1_RAW"; $p2 = Join-Path $cDir "2_TXT"; $p3 = Join-Path $cDir "3_TXT_dense"; $p4 = Join-Path $cDir "4_Packs"
                 foreach ($p in @($p1,$p2,$p3,$p4)) { if (!(Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null } }
 
-                if ($choice -eq "4") { Repair-Packs -BaseDir $cDir -Prefix $chan.Prefixe }
+                if ($choice -eq "4") { $null = Repair-Packs -BaseDir $cDir -Prefix $chan.Prefixe }
                 
                 $ignored = Sync-YouTube -Url $chan.URL -RawDir $p1 -YtDlp $YtDlp -Ffmpeg $Ffmpeg -Cookies @() -Lang $chan.Lang -BaseDir $cDir -LogPrefix $chan.Prefixe -BlacklistPath $BlacklistPath -RetryOnly ($mode -eq "3")
-                Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $chan.Lang -Prefix $chan.Prefixe
-                Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $chan.Prefixe -LogPrefix $chan.Prefixe -GlobalPacksDir $AllPacksDir
+                $newTxt = Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $chan.Lang -Prefix $chan.Prefixe
+                $null = Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $chan.Prefixe -LogPrefix $chan.Prefixe -GlobalPacksDir $AllPacksDir
                 
-                # Rapport
+                # Bilan Compact
                 $master = (Get-SafeContent (Join-Path $cDir "youtube_master_list.txt")).Count
                 $missing = (Get-SafeContent (Join-Path $cDir "missing_videos.txt")).Count
                 $raw = (Get-ChildItem $p1 -Filter "*.info.json").Count
-                Write-Host "`n--- BILAN $($chan.Prefixe) ---" -ForegroundColor Green
-                Write-Host "  Total: $master | Pretes: $raw | Ignorees: $ignored | Manquantes: $missing" -ForegroundColor White
+                
+                $statusIcon = if ($missing -eq 0) { "✅" } else { "⏳" }
+                Write-Host "  $statusIcon BILAN: " -NoNewline -ForegroundColor Green
+                Write-Host "Total: $master " -NoNewline -ForegroundColor White
+                Write-Host "| Pretes: $raw " -NoNewline -ForegroundColor Green
+                Write-Host "| Blacklist: $ignored " -NoNewline -ForegroundColor Gray
+                Write-Host "| Manquantes: $missing " -ForegroundColor ($missing -gt 0 ? "Yellow" : "Gray")
             } finally {
-                # On retire le verrou a la fin, quoi qu'il arrive
                 if (Test-Path $lockFile) { Remove-Item $lockFile -Force }
             }
         }
