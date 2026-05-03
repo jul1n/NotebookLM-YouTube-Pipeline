@@ -965,7 +965,7 @@ while ($true) {
         $doMigration = (Read-Host "  [1/$totalSteps] Lancer la migration ? [O/N] (Défaut: N)").ToUpper() -eq "O"
         $doIntegrity = (Read-Host "  [2/$totalSteps] Lancer le diagnostic d'intégrité ? [O/N] (Défaut: O)").ToUpper() -ne "N"
         $doDoublons  = (Read-Host "  [3/$totalSteps] Lancer le nettoyage des doublons ? [O/N] (Défaut: O)").ToUpper() -ne "N"
-        $doPacks     = (Read-Host "  [4/$totalSteps] Reconstruire les packs ? [O/N] (Défaut: O)").ToUpper() -ne "N"
+        $doPacks     = (Read-Host "  [4/$totalSteps] Lancer la reconstruction des packs ? [O/N] (Défaut: O)").ToUpper() -ne "N"
         $doLangues   = (Read-Host "  [5/$totalSteps] Lancer le filtrage des langues ? [O/N] (Défaut: N)").ToUpper() -eq "O"
 
         # Etape 1: Migration
