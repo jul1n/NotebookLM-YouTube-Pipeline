@@ -418,8 +418,90 @@ function Run-ReSubtitling {
 }
 
 # ==============================================================================
-# MENU PRINCIPAL
+# MODULE 4: INVENTAIRE ET TABLEAU DE BORD GLOBAL
 # ==============================================================================
+
+function Export-MasterInventory {
+    $exportPath = Join-Path $BaseDir "MASTER_INVENTORY_$(Get-Date -Format 'yyyyMMdd_HHmm').csv"
+    Write-Host "`n[SYSTEME] Generation de l'inventaire global... (Patientez)" -ForegroundColor Cyan
+    
+    $channels = Import-Csv $ConfigPath -Delimiter ";"
+    $inventory = [System.Collections.Generic.List[PSObject]]::new()
+    
+    # Charger la blacklist une seule fois pour la vitesse
+    $blContent = Get-SafeContent $BlacklistPath
+    $blMap = @{}
+    foreach ($line in $blContent) {
+        if ($line -match "^([a-zA-Z0-9_-]{11})") {
+            $id = $Matches[1]
+            $reason = "BLACKLIST"
+            if ($line -match "\[(.*?)\]") { $reason = $Matches[1] }
+            elseif ($line -match "Aucun sous-titre") { $reason = "NO-SUBS" }
+            $blMap[$id] = $reason
+        }
+    }
+
+    foreach ($chan in $channels) {
+        $logPrefix = $chan.Prefixe
+        $folder = ($chan.Prefixe -replace "[^a-zA-Z0-9]", "_").Trim()
+        $cDir = Join-Path $BaseDir $folder
+        if (!(Test-Path $cDir)) { continue }
+        
+        Write-Host "  > Analyse : $logPrefix" -ForegroundColor Gray
+        
+        $masterPath = Join-Path $cDir "youtube_master_list.txt"
+        $missingPath = Join-Path $cDir "missing_videos.txt"
+        $rawPath = Join-Path $cDir "1_RAW"
+        $densePath = Join-Path $cDir "3_TXT_dense"
+        
+        $masterIds = Get-SafeContent $masterPath
+        $missingIds = Get-SafeContent $missingPath
+        
+        # Cache des fichiers denses pour le compte de mots
+        $denseFiles = @{}
+        if (Test-Path $densePath) {
+            Get-ChildItem -Path $densePath -Filter "*.txt" | ForEach-Object {
+                if ($_.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $denseFiles[$Matches[1]] = $_.FullName }
+            }
+        }
+
+        foreach ($id in $masterIds) {
+            if ([string]::IsNullOrWhiteSpace($id)) { continue }
+            
+            $status = "UNKNOWN"
+            $reason = ""
+            $wordCount = 0
+            
+            if ($blMap.ContainsKey($id)) {
+                $status = "BLACKLISTED"
+                $reason = $blMap[$id]
+            } elseif ($denseFiles.ContainsKey($id)) {
+                $status = "SUCCESS"
+                # Calcul rapide du nombre de mots
+                try {
+                    $content = [System.IO.File]::ReadAllText($denseFiles[$id])
+                    $txtPart = ($content -split "`r`n`r`n", 2)[1]
+                    $wordCount = ($txtPart -split "\s+" | Where-Object { $_ -ne "" }).Count
+                } catch { }
+            } elseif ($missingIds -contains $id) {
+                $status = "FAILED/PENDING"
+            }
+
+            [void]$inventory.Add([PSCustomObject]@{
+                Channel = $logPrefix
+                VideoID = $id
+                Status  = $status
+                Reason  = $reason
+                Words   = $wordCount
+                Folder  = $folder
+            })
+        }
+    }
+
+    $inventory | Export-Csv -Path $exportPath -NoTypeInformation -Delimiter "," -Encoding utf8
+    Write-Host "`n[SUCCES] Inventaire genere : $exportPath" -ForegroundColor Green
+    Write-Host "Vous pouvez l'ouvrir avec Excel ou Google Sheets." -ForegroundColor Gray
+}
 
 while ($true) {
     Clear-Host
@@ -433,6 +515,7 @@ while ($true) {
     Write-Host "5. Lancer le diagnostic de LANGUE (Filtrage)"
     Write-Host "6. Lancer le workflow RE-SUBTITLING (Videos 1fps)"
     Write-Host "7. Maintenance GLOBALE (Nettoyage + Diagnostic)"
+    Write-Host "8. Generer l'INVENTAIRE GLOBAL (Fichier CSV)"
     Write-Host "0. Quitter"
     Write-Host "-------------------------------------------------"
     $choice = Read-Host "Votre choix"
@@ -476,6 +559,7 @@ while ($true) {
     }
     elseif ($choice -eq "5") { Run-LanguageDiagnostic }
     elseif ($choice -eq "6") { Run-ReSubtitling }
+    elseif ($choice -eq "8") { Export-MasterInventory }
     
     Write-Host "`nAppuyez sur une touche pour continuer..."
     $null = [Console]::ReadKey()
