@@ -587,13 +587,20 @@ function Repair-Packs {
 
             if ($isDirty) {
                 Write-Host "    [!] $reason dans le texte : $($f.Name)" -ForegroundColor Red
-                Remove-Item -LiteralPath $f.FullName -Force; $corruptedCount++
                 
-                # Pour les artifacts VTT, on ne supprime PAS le RAW, on veut juste que Process-LocalFiles le regenere proprement.
-                # Pour les fuites JSON (corruption de structure), on supprime le RAW pour forcer le re-telechargement.
-                if ($reason -eq "Fuite JSON") {
-                    $id = if ($f.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $Matches[1] }
-                    if ($id) { Get-ChildItem -LiteralPath $rawDir | Where-Object { $_.Name.Contains($id) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue }
+                # Identification de l'ID pour tout nettoyer d'un coup
+                $id = if ($f.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $Matches[1] }
+                
+                if ($id) {
+                    # On supprime TOUTES les versions texte derivees pour cet ID (RAW TXT, DENSE, etc.)
+                    $derivedFiles = Get-ChildItem -Path $BaseDir -Recurse -File | Where-Object { $_.Name -match "\[$id\]" -and $_.Extension -eq ".txt" }
+                    foreach ($df in $derivedFiles) { Remove-Item -LiteralPath $df.FullName -Force -ErrorAction SilentlyContinue }
+                    $corruptedCount++
+                }
+
+                # Pour les fuites JSON (corruption de structure), on supprime aussi le RAW pour forcer le re-telechargement.
+                if ($reason -eq "Fuite JSON" -and $id) {
+                    Get-ChildItem -LiteralPath $rawDir | Where-Object { $_.Name.Contains($id) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue
                 }
             }
         }
