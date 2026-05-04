@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v13.1
+# Industrial YouTube Transcription Pipeline v13.1.1
 # Unified Industrial Suite for NotebookLM
-# v13.1: Automatic 'Move from Blacklist to Upload List' logic for processed videos.
+# v13.1.1: Improved Inventory UI with channel progress counters.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -1036,6 +1036,8 @@ function Export-MasterInventory {
     Write-Host "`n[SYSTEME] Generation de l'inventaire global... (Patientez)" -ForegroundColor Cyan
     
     $channels = Import-Csv $ConfigPath -Delimiter ";"
+    $totalChans = $channels.Count
+    $cIdx = 0
     $inventory = [System.Collections.Generic.List[PSObject]]::new()
     
     # Charger la blacklist une seule fois pour la vitesse
@@ -1051,7 +1053,9 @@ function Export-MasterInventory {
         }
     }
 
+    Write-Host "`n  Traitement de $totalChans chaînes configurées..." -ForegroundColor White
     foreach ($chan in $channels) {
+        $cIdx++
         $logPrefix = $chan.Prefixe
         
         # On tente plusieurs variantes de nom de dossier pour etre sur de trouver la chaine
@@ -1069,11 +1073,11 @@ function Export-MasterInventory {
         }
 
         if (!$cDir) { 
-            Write-Host "  [!] Dossier absent pour : $logPrefix" -ForegroundColor Yellow
+            Write-Host "  [$cIdx/$totalChans] [!] Dossier absent pour : $logPrefix" -ForegroundColor Yellow
             continue 
         }
         
-        Write-Host "  > Analyse : $logPrefix" -ForegroundColor Gray
+        Write-Host "  [$cIdx/$totalChans] Analyse : $logPrefix" -ForegroundColor Gray
         
         $masterPath = Join-Path $cDir "youtube_master_list.txt"
         $missingPath = Join-Path $cDir "missing_videos.txt"
@@ -1184,7 +1188,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "`n  ============================================================" -ForegroundColor Magenta
-    Write-Host "             INDUSTRIAL PIPELINE v13.1 UNIFIED" -ForegroundColor White
+    Write-Host "             INDUSTRIAL PIPELINE v13.1.1 UNIFIED" -ForegroundColor White
     Write-Host "  ============================================================`n" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
