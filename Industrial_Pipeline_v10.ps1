@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v13.1.1
+# Industrial YouTube Transcription Pipeline v13.2
 # Unified Industrial Suite for NotebookLM
-# v13.1.1: Improved Inventory UI with channel progress counters.
+# v13.2: Targeted Maintenance mode (run diagnostics on a specific channel).
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -1188,7 +1188,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "`n  ============================================================" -ForegroundColor Magenta
-    Write-Host "             INDUSTRIAL PIPELINE v13.1.1 UNIFIED" -ForegroundColor White
+    Write-Host "             INDUSTRIAL PIPELINE v13.2 UNIFIED" -ForegroundColor White
     Write-Host "  ============================================================`n" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
@@ -1330,6 +1330,19 @@ while ($true) {
         Write-Host "  ║             Maintenance globale du pipeline              ║" -ForegroundColor White
         Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
         
+        $mMode = Read-Host "`n  Mode de travail : (1) TOUTES les chaînes | (2) Une chaîne spécifique [Défaut: 1]"
+        if ($mMode -eq "2") {
+            Write-Host "`n  --- SELECTION DE LA CHAINE ---" -ForegroundColor Cyan
+            for ($i=0; $i -lt $channels.Count; $i++) {
+                Write-Host "  $($i+1). $($channels[$i].Prefixe)"
+            }
+            $cSel = Read-Host "`n  Choix (1-$($channels.Count))"
+            if ($cSel -as [int] -and [int]$cSel -gt 0 -and [int]$cSel -le $channels.Count) {
+                $channels = @($channels[[int]$cSel - 1])
+                Write-Host "  [OK] Cible : $($channels[0].Prefixe)" -ForegroundColor Green
+            }
+        }
+
         $steps = @("Migration", "Integrite", "Doublons", "Packs", "Langues", "Verification")
         $totalSteps = $steps.Count
 
@@ -1416,7 +1429,7 @@ while ($true) {
             Review-GlobalPacks -GlobalPacksDir $AllPacksDir
         }
 
-        Write-Host "`n  [SUCCES] Maintenance Globale Terminee." -ForegroundColor Green
+        Write-Host "`n  [SUCCES] Maintenance Terminee." -ForegroundColor Green
     }
     elseif ($choice -eq "7") { Export-MasterInventory }
     
