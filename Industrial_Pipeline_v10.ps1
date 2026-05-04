@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.4
+# Industrial YouTube Transcription Pipeline v10.5
 # Unified Industrial Suite for NotebookLM
-# v10.4: Ultra-aggressive VTT cleaning & case-insensitive JSON support.
+# v10.5: Global maintenance headers, standardized UI width & advanced pack synthesis.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -55,11 +55,11 @@ $blacklistCandidates = [System.Collections.Generic.List[PSObject]]::new()
 
 function Write-StepHeader {
     param ($Title, $StepNum = $null, $TotalSteps = $null, $Emoji = "📦")
-    $line = "══════════════════════════════════════════════"
+    $line = "══════════════════════════════════════════════════════════"
     $fullTitle = if ($StepNum) { "[ETAPE $StepNum/$TotalSteps] $Title" } else { $Title }
     # Padding manuel pour eviter les artefacts de PadRight
     $rawTitle = "$Emoji $fullTitle"
-    $padSize = 44 - $rawTitle.Length
+    $padSize = 57 - $rawTitle.Length
     if ($padSize -lt 0) { $padSize = 0 }
     $padding = " " * $padSize
     Write-Host "`n  ╔$line╗" -ForegroundColor Cyan
@@ -451,11 +451,13 @@ function Process-LocalFiles {
                     
                     # On ne garde que l'essentiel de la meta pour le fichier dense (evite les leaks de 2MB de JSON)
                     try {
+                        $jsonMeta = [System.IO.File]::ReadAllText($json.FullName)
                         $meta = $jsonMeta | ConvertFrom-Json -AsHashTable
                         $compactMeta = @{
                             id = $meta.id
                             title = $meta.title
                             upload_date = $meta.upload_date
+                            duration = $meta.duration
                             channel = $meta.channel
                             description = $meta.description
                             view_count = $meta.view_count
@@ -701,25 +703,39 @@ function Review-GlobalPacks($GlobalPacksDir) {
     
     Write-Host "`n  📊  BILAN DES PACKS GENERES" -ForegroundColor Cyan
     Write-Host "  " + ("═" * 60) -ForegroundColor Cyan
-    Write-Host "  Pack Name".PadRight(45) + "Words".PadLeft(12) -ForegroundColor Gray
+    Write-Host "  Pack Name".PadRight(34) + "Vids".PadLeft(5) + "Hours".PadLeft(8) + "Words".PadLeft(13) -ForegroundColor Gray
     
-    $totalWords = 0
+    $totalWords = 0; $totalVids = 0; $totalSecs = 0
     foreach ($p in $packs) {
         # Lecture securisee pour eviter les erreurs d'encodage
         $content = [System.IO.File]::ReadAllText($p.FullName)
+        
+        # Nombre de mots
         $words = ($content -split "\s+" | Where-Object { $_ -ne "" }).Count
-        $totalWords += $words
+        
+        # Nombre de videos (on compte les marqueurs SOURCE:)
+        $vids = ([regex]::Matches($content, "SOURCE:")).Count
+        
+        # Somme des durees (on extrait le champ duration du JSON compact)
+        $secs = 0
+        [regex]::Matches($content, '"duration":\s*(\d+)') | ForEach-Object { $secs += [int]$_.Groups[1].Value }
+        $hrs = $secs / 3600
+        
+        $totalWords += $words; $totalVids += $vids; $totalSecs += $secs
         
         # NotebookLM a une limite de 500k mots. 
         # Vert si < 500k (Optimal), Orange si >= 500k (Risque de coupure)
         $color = if ($words -ge 500000) { "Yellow" } else { "Green" }
-        $shortName = if ($p.Name.Length -gt 42) { $p.Name.Substring(0, 39) + "..." } else { $p.Name }
+        $shortName = if ($p.Name.Length -gt 31) { $p.Name.Substring(0, 28) + "..." } else { $p.Name }
         
-        Write-Host "  $($shortName.PadRight(45))" -NoNewline -ForegroundColor White
+        Write-Host "  $($shortName.PadRight(34))" -NoNewline -ForegroundColor White
+        Write-Host "$($vids.ToString().PadLeft(5))" -NoNewline -ForegroundColor Gray
+        Write-Host "$($hrs.ToString('F1').PadLeft(7))h" -NoNewline -ForegroundColor Gray
         Write-Host " $($words.ToString('N0').PadLeft(11))" -ForegroundColor $color
     }
     Write-Host "  " + ("═" * 60) -ForegroundColor Cyan
-    Write-Host "  TOTAL : $($totalWords.ToString('N0')) mots dans $($packs.Count) packs." -ForegroundColor Gray
+    $totalHrs = $totalSecs / 3600
+    Write-Host "  TOTAL : $($totalWords.ToString('N0')) mots | $($totalVids) vidéos | $($totalHrs.ToString('N1'))h dans $($packs.Count) packs." -ForegroundColor Gray
 }
 
 function Clean-GlobalPacks {
@@ -933,7 +949,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v10.4 Unified            ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v10.5 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
@@ -1071,9 +1087,9 @@ while ($true) {
     elseif ($choice -eq "4") { Run-LanguageDiagnostic }
     elseif ($choice -eq "5") { Run-ReSubtitling }
     elseif ($choice -eq "6") {
-        Write-Host "  ╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "  ║       Maintenance globale du pipeline        ║" -ForegroundColor White
-        Write-Host "  ╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "  ║             Maintenance globale du pipeline              ║" -ForegroundColor White
+        Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
         
         $steps = @("Migration", "Integrite", "Doublons", "Packs", "Langues", "Verification")
         $totalSteps = $steps.Count
@@ -1092,44 +1108,58 @@ while ($true) {
             if ($migrated) { $channels = Import-Csv $ConfigPath -Delimiter ";" }
         }
         
-        $chanCount = 0; $totalChans = $channels.Count
-        foreach ($c in $channels) {
-            $chanCount++
-            $folder = $c.Prefixe 
-            $cDir = Join-Path $BaseDir $folder
-            if (!(Test-Path -LiteralPath $cDir)) { continue }
-            Write-Host "`n  ─── [$chanCount/$totalChans] 🛠️  ANALYSE : $($c.Prefixe) ───" -ForegroundColor Cyan
-            
-            # Etape 2: Integrite
-            if ($doIntegrity) {
-                Write-SubStep -Title "INTEGRITE" -StepNum 2 -TotalSteps $totalSteps -Emoji "🔍"
-                $diag = Repair-Packs -BaseDir $cDir -Prefix $c.Prefixe
-                
-                if ($diag.NeedDownload) {
-                    Write-Host "      [AUTO-HEAL] Re-telechargement..." -ForegroundColor Cyan
-                    $p1 = Join-Path $cDir "1_RAW"
-                    $null = Sync-YouTube -Url $c.URL -RawDir $p1 -YtDlp $YtDlp -Ffmpeg $Ffmpeg -Cookies @() -Lang $c.Lang -BaseDir $cDir -LogPrefix $c.Prefixe -BlacklistPath $BlacklistPath -RetryOnly $true
+        # Etape 2: Diagnostic d'Intégrité
+        if ($doIntegrity) {
+            Write-StepHeader -Title "Diagnostic d'Intégrité" -StepNum 2 -TotalSteps $totalSteps -Emoji "🔍"
+            foreach ($c in $channels) {
+                $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
+                if (Test-Path -LiteralPath $cDir) {
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum 2 -TotalSteps $totalSteps -Emoji "🔍"
+                    $diag = Repair-Packs -BaseDir $cDir -Prefix $c.Prefixe
+                    if ($diag.NeedDownload) {
+                        Write-Host "      [AUTO-HEAL] Re-telechargement..." -ForegroundColor Cyan
+                        $p1 = Join-Path $cDir "1_RAW"
+                        $null = Sync-YouTube -Url $c.URL -RawDir $p1 -YtDlp $YtDlp -Ffmpeg $Ffmpeg -Cookies @() -Lang $c.Lang -BaseDir $cDir -LogPrefix $c.Prefixe -BlacklistPath $BlacklistPath -RetryOnly $true
+                    }
                 }
             }
+        }
 
-            # Etape 3: Doublons
-            if ($doDoublons) {
-                Write-SubStep -Title "DOUBLONS" -StepNum 3 -TotalSteps $totalSteps -Emoji "👯"
-                Maintenance-Doublons -chanDir $cDir -prefix $c.Prefixe
+        # Etape 3: Nettoyage des Doublons
+        if ($doDoublons) {
+            Write-StepHeader -Title "Nettoyage des Doublons" -StepNum 3 -TotalSteps $totalSteps -Emoji "👯"
+            foreach ($c in $channels) {
+                $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
+                if (Test-Path -LiteralPath $cDir) {
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum 3 -TotalSteps $totalSteps -Emoji "👯"
+                    Maintenance-Doublons -chanDir $cDir -prefix $c.Prefixe
+                }
             }
-            
-            # Etape 4: Reconstruction
-            if ($doPacks) {
-                Write-SubStep -Title "PACKS" -StepNum 4 -TotalSteps $totalSteps -Emoji "📦"
-                $p1 = Join-Path $cDir "1_RAW"; $p2 = Join-Path $cDir "2_TXT"; $p3 = Join-Path $cDir "3_TXT_dense"; $p4 = Join-Path $cDir "4_Packs"
-                $null = Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $c.Lang -Prefix $c.Prefixe
-                $null = Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $c.Prefixe -LogPrefix $c.Prefixe -GlobalPacksDir $AllPacksDir
+        }
+        
+        # Etape 4: Reconstruction des Packs
+        if ($doPacks) {
+            Write-StepHeader -Title "Reconstruction des Packs" -StepNum 4 -TotalSteps $totalSteps -Emoji "📦"
+            foreach ($c in $channels) {
+                $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
+                if (Test-Path -LiteralPath $cDir) {
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum 4 -TotalSteps $totalSteps -Emoji "📦"
+                    $p1 = Join-Path $cDir "1_RAW"; $p2 = Join-Path $cDir "2_TXT"; $p3 = Join-Path $cDir "3_TXT_dense"; $p4 = Join-Path $cDir "4_Packs"
+                    $null = Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $c.Lang -Prefix $c.Prefixe
+                    $null = Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $c.Prefixe -LogPrefix $c.Prefixe -GlobalPacksDir $AllPacksDir
+                }
             }
+        }
 
-            # Etape 5: Langue
-            if ($doLangues) {
-                Write-SubStep -Title "LANGUES" -StepNum 5 -TotalSteps $totalSteps -Emoji "🧪"
-                Run-LanguageDiagnostic -SpecificChannelDir $cDir
+        # Etape 5: Diagnostic de Langue
+        if ($doLangues) {
+            Write-StepHeader -Title "Filtrage des Langues" -StepNum 5 -TotalSteps $totalSteps -Emoji "🧪"
+            foreach ($c in $channels) {
+                $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
+                if (Test-Path -LiteralPath $cDir) {
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum 5 -TotalSteps $totalSteps -Emoji "🧪"
+                    Run-LanguageDiagnostic -SpecificChannelDir $cDir
+                }
             }
         }
         
