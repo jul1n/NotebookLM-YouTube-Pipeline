@@ -1,19 +1,51 @@
-# Binaries
-BIN/*
-!BIN/.gitkeep
+# Industrial YouTube Transcription Pipeline - Ignore Patterns
 
-# Ignore ALL subdirectories in the root (covers all channel folders without naming them)
-/*/
+# Binaries and Executables
+BIN/
+*.exe
+*.dll
 
-# Except these directories if you want to keep them (optional)
-!BIN/
-
-# Logs and sensitive info
-pipeline_operations.log
-cookie.txt
+# Personal Configuration and Privacy (CRITICAL)
+channels_config.csv
 cookies.txt
-*.log
+cookie.txt
+*.cookie
+*.cookies
 
-# OS files
-.DS_Store
-Thumbs.db
+# Operational Logs and Working Directories
+_LOGS/
+_RE_SUBTITLING_WORK/
+_RE_SUBTITLING_WORK_TEST/
+pipeline_operations.log
+scratch/
+backups/
+ALL_PACKS/
+*.lock
+
+# Inventory and Personal Lists
+blacklist.txt
+a_uploader.txt
+MASTER_INVENTORY_*.csv
+MASTER_INVENTORY.csv
+
+# Legacy / Obsolete Scripts
+pipeline_v8.ps1
+pipeline_v9.ps1
+re_subtitler.ps1
+check_languages.ps1
+"pipeline_v8 - marche bien avec Firefox.ps1"
+
+# Channel-specific Data (Ignore all processing folders)
+**/1_RAW/
+**/2_TXT/
+**/3_TXT_dense/
+**/4_Packs/
+**/01_RAW/
+**/youtube_master_list.txt
+**/master_list.json
+**/missing_videos.txt
+**/archive.txt
+**/temp_cookies.txt
+**/process.lock
+**/re_subtitler.ps1
+**/check_languages.ps1
