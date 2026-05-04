@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.0
+# Industrial YouTube Transcription Pipeline v12.1
 # Unified Industrial Suite for NotebookLM
-# v12.0: Local buffering for blacklist (fixes Drive-related memory/parser errors).
+# v12.1: Overhauled Master Inventory with Title, Date, and granular status mapping.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -980,7 +980,10 @@ function Export-MasterInventory {
         $logPrefix = $chan.Prefixe
         $folder = ($chan.Prefixe -replace "[^a-zA-Z0-9]", "_").Trim()
         $cDir = Join-Path $BaseDir $folder
-        if (!(Test-Path $cDir)) { continue }
+        if (!(Test-Path $cDir)) { 
+            Write-Host "  [!] Dossier absent pour : $logPrefix" -ForegroundColor Yellow
+            continue 
+        }
         
         Write-Host "  > Analyse : $logPrefix" -ForegroundColor Gray
         
@@ -990,9 +993,11 @@ function Export-MasterInventory {
         $densePath = Join-Path $cDir "3_TXT_dense"
         
         $masterIds = Get-SafeContent $masterPath
-        $missingIds = Get-SafeContent $missingPath
         
-        # Cache des fichiers denses pour le compte de mots
+        $missingIds = @{}
+        foreach ($mId in (Get-SafeContent $missingPath)) { if ($mId.Trim()) { $missingIds[$mId.Trim()] = $true } }
+        
+        # Cache des fichiers denses
         $denseFiles = @{}
         if (Test-Path $densePath) {
             Get-ChildItem -Path $densePath -Filter "*.txt" | ForEach-Object {
@@ -1000,48 +1005,81 @@ function Export-MasterInventory {
             }
         }
 
+        # Cache des fichiers RAW pour metadonnees
+        $rawFiles = @{}
+        if (Test-Path $rawPath) {
+            Get-ChildItem -Path $rawPath -Filter "*.info.json" | ForEach-Object {
+                if ($_.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $rawFiles[$Matches[1]] = $_.FullName }
+            }
+        }
+
         foreach ($id in $masterIds) {
+            $id = $id.Trim()
             if ([string]::IsNullOrWhiteSpace($id)) { continue }
             
-            $status = "UNKNOWN"
+            $status = "DETECTED (ON YT)"
             $reason = ""
             $wordCount = 0
+            $title = ""
+            $date = ""
             
+            # Recuperation du Titre / Date via le nom du fichier RAW s'il existe
+            if ($rawFiles.ContainsKey($id)) {
+                $fName = [System.IO.Path]::GetFileNameWithoutExtension($rawFiles[$id])
+                # Format: 20220125 - Title [ID]
+                if ($fName -match "^(\d{8})\s*-\s*(.*)\s+\[$id\]") {
+                    $date = $Matches[1]; $title = $Matches[2]
+                } elseif ($fName -match "^(.*)\s+\[$id\]") {
+                    $title = $Matches[1]
+                }
+            }
+
             if ($blMap.ContainsKey($id)) {
                 $status = "BLACKLISTED"
                 $reason = $blMap[$id]
             } elseif ($denseFiles.ContainsKey($id)) {
-                $status = "SUCCESS"
-                # Calcul rapide du nombre de mots
+                $status = "SUCCESS (DENSE)"
                 try {
                     $content = [System.IO.File]::ReadAllText($denseFiles[$id])
-                    $txtPart = ($content -split "`r`n`r`n", 2)[1]
-                    $wordCount = ($txtPart -split "\s+" | Where-Object { $_ -ne "" }).Count
+                    # Tentative de recup titre si vide
+                    if (!$title -and $content -match "TITLE: (.*)") { $title = $Matches[1].Trim() }
+                    
+                    $parts = $content -split "`r`n`r`n", 2
+                    if ($parts.Count -gt 1) {
+                        $wordCount = ($parts[1] -split "\s+" | Where-Object { $_ -ne "" }).Count
+                    }
                 } catch { }
-            } elseif ($missingIds -contains $id) {
+            } elseif ($rawFiles.ContainsKey($id)) {
+                $status = "DOWNLOADED (RAW ONLY)"
+            } elseif ($missingIds.ContainsKey($id)) {
                 $status = "FAILED/PENDING"
             }
 
             [void]$inventory.Add([PSCustomObject]@{
                 Channel = $logPrefix
+                Date    = $date
+                Title   = $title
                 VideoID = $id
                 Status  = $status
                 Reason  = $reason
                 Words   = $wordCount
-                Folder  = $folder
             })
         }
     }
 
-    $inventory | Export-Csv -Path $exportPath -NoTypeInformation -Delimiter "," -Encoding utf8
-    Write-Host "`n[SUCCES] Inventaire genere : $exportPath" -ForegroundColor Green
-    Write-Host "Vous pouvez l'ouvrir avec Excel ou Google Sheets." -ForegroundColor Gray
+    if ($inventory.Count -gt 0) {
+        $inventory | Export-Csv -Path $exportPath -NoTypeInformation -Delimiter "," -Encoding utf8
+        Write-Host "`n[SUCCES] Inventaire genere : $exportPath" -ForegroundColor Green
+        Write-Host "Nombre total d'entrees : $($inventory.Count)" -ForegroundColor White
+    } else {
+        Write-Host "`n[!] Aucun donnee trouvee pour l'inventaire." -ForegroundColor Red
+    }
 }
 
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v12.0 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v12.1 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
