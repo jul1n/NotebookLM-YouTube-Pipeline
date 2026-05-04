@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.4
+# Industrial YouTube Transcription Pipeline v12.5
 # Unified Industrial Suite for NotebookLM
-# v12.4: Deep diagnostic logs for re-subtitling (path tracking + try/catch).
+# v12.5: For-loop iteration for re-subtitling and enhanced loop tracing.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -846,6 +846,16 @@ function Run-LanguageDiagnostic {
 # ==============================================================================
 
 function Run-ReSubtitling {
+    # Chemins dedies au Workflow de re-sous-titrage
+    $AudioDir = Join-Path $BaseDir "_RE_SUBTITLING_WORK\1_AUDIO"
+    $OutputDir = Join-Path $BaseDir "_RE_SUBTITLING_WORK\3_STATIC_VIDEOS"
+    $ThumbDir = Join-Path $BaseDir "_RE_SUBTITLING_WORK\0_THUMBS"
+
+    # S'assurer que les dossiers existent
+    foreach ($dir in @($AudioDir, $OutputDir, $ThumbDir)) {
+        if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    }
+
     Write-Host "`n=================================================" -ForegroundColor Cyan
     Write-Host "   WORKFLOW RE-SUBTITLING (1FPS STATIC VIDEOS)" -ForegroundColor Cyan
     Write-Host "=================================================" -ForegroundColor Cyan
@@ -912,8 +922,12 @@ function Run-ReSubtitling {
     $success = 0; $failed = 0; $idx = 0; $batchIdx = 0
     
     try {
-        foreach ($id in $finalIds) {
-            $idx++; $batchIdx++; $stats = "[$idx/$($finalIds.Count)] [OK: $success | KO: $failed]"
+        for ($i=0; $i -lt $finalIds.Count; $i++) {
+            $id = $finalIds[$i]
+            $idx = $i + 1; $batchIdx = $idx
+            $stats = "[$idx/$($finalIds.Count)] [OK: $success | KO: $failed]"
+            
+            Write-Host "  [TRACE] Debut loop ($idx/$($finalIds.Count)) pour ID: $id" -ForegroundColor Gray
             
             $audioPath = Join-Path $AudioDir "$id.m4a"
             $videoPath = Join-Path $OutputDir "$id.mp4"
@@ -927,33 +941,33 @@ function Run-ReSubtitling {
 
             Write-Log "$stats Traitement : $id" "Cyan"
         
-        # Audio
-        if (!(Test-Path -LiteralPath $audioPath)) {
-            & $YtDlp --user-agent $userAgent --quiet --no-warnings -f "bestaudio[ext=m4a]/bestaudio" -o $audioPath "https://www.youtube.com/watch?v=$id"
-            if (Test-Path -LiteralPath $audioPath) { Update-BlacklistEntry -id $id -marker "[RE-SUB-AUDIO]" -NoFlush $true }
-        }
-        
-        # Video 1fps
-        if ((Test-Path -LiteralPath $audioPath) -and !(Test-Path -LiteralPath $videoPath)) {
-            # On recupere la vignette
-            & $ytDlp --user-agent $userAgent --quiet --no-warnings --write-thumbnail --skip-download -o (Join-Path $ThumbDir $id) "https://www.youtube.com/watch?v=$id"
-            $thumb = Get-ChildItem -LiteralPath $ThumbDir -Filter "$id.*" | Where-Object { $_.Extension -ne ".m4a" } | Select-Object -First 1
-            $tIn = if ($thumb) { $thumb.FullName } else { "color=c=black:s=1280x720:r=1" }
-            
-            if ($thumb) {
-                & $Ffmpeg -y -loglevel error -probesize 100M -analyzeduration 100M -loop 1 -framerate 1 -i $tIn -i $audioPath -c:v libx264 -tune stillimage -preset ultrafast -pix_fmt yuv420p -c:a copy -shortest $videoPath
-            } else {
-                & $Ffmpeg -y -loglevel error -probesize 100M -analyzeduration 100M -f lavfi -i $tIn -i $audioPath -c:v libx264 -tune stillimage -preset ultrafast -pix_fmt yuv420p -c:a copy -shortest $videoPath
+            # Audio
+            if (!(Test-Path -LiteralPath $audioPath)) {
+                & $YtDlp --user-agent $userAgent --quiet --no-warnings -f "bestaudio[ext=m4a]/bestaudio" -o $audioPath "https://www.youtube.com/watch?v=$id"
+                if (Test-Path -LiteralPath $audioPath) { Update-BlacklistEntry -id $id -marker "[RE-SUB-AUDIO]" -NoFlush $true }
             }
-        }
-        
-        if (Test-Path -LiteralPath $videoPath) { 
-            $success++; Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true 
-        } else { $failed++ }
+            
+            # Video 1fps
+            if ((Test-Path -LiteralPath $audioPath) -and !(Test-Path -LiteralPath $videoPath)) {
+                # On recupere la vignette
+                & $ytDlp --user-agent $userAgent --quiet --no-warnings --write-thumbnail --skip-download -o (Join-Path $ThumbDir $id) "https://www.youtube.com/watch?v=$id"
+                $thumb = Get-ChildItem -LiteralPath $ThumbDir -Filter "$id.*" | Where-Object { $_.Extension -ne ".m4a" } | Select-Object -First 1
+                $tIn = if ($thumb) { $thumb.FullName } else { "color=c=black:s=1280x720:r=1" }
+                
+                if ($thumb) {
+                    & $Ffmpeg -y -loglevel error -probesize 100M -analyzeduration 100M -loop 1 -framerate 1 -i $tIn -i $audioPath -c:v libx264 -tune stillimage -preset ultrafast -pix_fmt yuv420p -c:a copy -shortest $videoPath
+                } else {
+                    & $Ffmpeg -y -loglevel error -probesize 100M -analyzeduration 100M -f lavfi -i $tIn -i $audioPath -c:v libx264 -tune stillimage -preset ultrafast -pix_fmt yuv420p -c:a copy -shortest $videoPath
+                }
+            }
+            
+            if (Test-Path -LiteralPath $videoPath) { 
+                $success++; Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true 
+            } else { $failed++ }
 
-        # Sauvegarde periodique de la blacklist (toutes les 10 videos) pour securite crash
-        if ($batchIdx % 10 -eq 0) { Flush-BlacklistUpdates }
-    }
+            # Sauvegarde periodique de la blacklist (toutes les 10 videos) pour securite crash
+            if ($batchIdx % 10 -eq 0) { Flush-BlacklistUpdates }
+        }
     } catch {
         Write-Host "`n[!] ERREUR DANS LA BOUCLE : $_" -ForegroundColor Red
     }
@@ -1122,7 +1136,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v12.4 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v12.5 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
