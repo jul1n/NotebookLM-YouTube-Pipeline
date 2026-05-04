@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.9
+# Industrial YouTube Transcription Pipeline v10.9.2
 # Unified Industrial Suite for NotebookLM
-# v10.9: Intelligent auto-heal (Local re-processing priority to avoid YouTube re-downloads).
+# v10.9.2: Fixed syntax in Run-ReSubtitling and added existing video skip logic.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -879,10 +879,16 @@ function Run-ReSubtitling {
     
     foreach ($id in $idsToProcess) {
         $idx++; $stats = "[$idx/$($idsToProcess.Count)] [OK: $success | KO: $failed]"
-        Write-Log "$stats Traitement : $id" "Cyan"
         
         $audioPath = Join-Path $AudioDir "$id.m4a"
         $videoPath = Join-Path $OutputDir "$id.mp4"
+        
+        if (Test-Path -LiteralPath $videoPath) {
+            Write-Log "$stats Skip (Déjà généré) : $id" "Green"
+            $success++; continue
+        }
+
+        Write-Log "$stats Traitement : $id" "Cyan"
         
         # Audio
         if (!(Test-Path -LiteralPath $audioPath)) {
@@ -891,7 +897,7 @@ function Run-ReSubtitling {
         }
         
         # Video 1fps
-        if (Test-Path -LiteralPath $audioPath -and !(Test-Path -LiteralPath $videoPath)) {
+        if ((Test-Path -LiteralPath $audioPath) -and !(Test-Path -LiteralPath $videoPath)) {
             # On recupere la vignette
             & $ytDlp --user-agent $userAgent --quiet --no-warnings --write-thumbnail --skip-download -o (Join-Path $ThumbDir $id) "https://www.youtube.com/watch?v=$id"
             $thumb = Get-ChildItem -LiteralPath $ThumbDir -Filter "$id.*" | Where-Object { $_.Extension -ne ".m4a" } | Select-Object -First 1
@@ -997,7 +1003,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v10.9 Unified             ║" -ForegroundColor White
+    Write-Host "  ║            Industrial Pipeline v10.9.2 Unified            ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
@@ -1159,10 +1165,12 @@ while ($true) {
         # Etape 2: Diagnostic d'Intégrité
         if ($doIntegrity) {
             Write-StepHeader -Title "Diagnostic d'Intégrité" -StepNum 2 -TotalSteps $totalSteps -Emoji "🔍"
+            $cIdx = 0; $cTotal = $channels.Count
             foreach ($c in $channels) {
+                $cIdx++
                 $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
                 if (Test-Path -LiteralPath $cDir) {
-                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum 2 -TotalSteps $totalSteps -Emoji "🔍"
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "🔍"
                     $diag = Repair-Packs -BaseDir $cDir -Prefix $c.Prefixe
                     if ($diag.NeedDownload) {
                         Write-Host "      [AUTO-HEAL] Re-telechargement..." -ForegroundColor Cyan
@@ -1176,10 +1184,12 @@ while ($true) {
         # Etape 3: Nettoyage des Doublons
         if ($doDoublons) {
             Write-StepHeader -Title "Nettoyage des Doublons" -StepNum 3 -TotalSteps $totalSteps -Emoji "👯"
+            $cIdx = 0; $cTotal = $channels.Count
             foreach ($c in $channels) {
+                $cIdx++
                 $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
                 if (Test-Path -LiteralPath $cDir) {
-                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum 3 -TotalSteps $totalSteps -Emoji "👯"
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "👯"
                     Maintenance-Doublons -chanDir $cDir -prefix $c.Prefixe
                 }
             }
@@ -1188,10 +1198,12 @@ while ($true) {
         # Etape 4: Reconstruction des Packs
         if ($doPacks) {
             Write-StepHeader -Title "Reconstruction des Packs" -StepNum 4 -TotalSteps $totalSteps -Emoji "📦"
+            $cIdx = 0; $cTotal = $channels.Count
             foreach ($c in $channels) {
+                $cIdx++
                 $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
                 if (Test-Path -LiteralPath $cDir) {
-                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum 4 -TotalSteps $totalSteps -Emoji "📦"
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "📦"
                     $p1 = Join-Path $cDir "1_RAW"; $p2 = Join-Path $cDir "2_TXT"; $p3 = Join-Path $cDir "3_TXT_dense"; $p4 = Join-Path $cDir "4_Packs"
                     $null = Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $c.Lang -Prefix $c.Prefixe
                     $null = Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $c.Prefixe -LogPrefix $c.Prefixe -GlobalPacksDir $AllPacksDir
@@ -1202,10 +1214,12 @@ while ($true) {
         # Etape 5: Diagnostic de Langue
         if ($doLangues) {
             Write-StepHeader -Title "Filtrage des Langues" -StepNum 5 -TotalSteps $totalSteps -Emoji "🧪"
+            $cIdx = 0; $cTotal = $channels.Count
             foreach ($c in $channels) {
+                $cIdx++
                 $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
                 if (Test-Path -LiteralPath $cDir) {
-                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum 5 -TotalSteps $totalSteps -Emoji "🧪"
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "🧪"
                     Run-LanguageDiagnostic -SpecificChannelDir $cDir
                 }
             }
