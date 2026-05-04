@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.6
+# Industrial YouTube Transcription Pipeline v10.7
 # Unified Industrial Suite for NotebookLM
-# v10.6: Advanced Blacklist sorting & SUB-MISSING tag support for re-subtitling.
+# v10.7: Targeted category processing for Language Diagnostic and Re-subtitling.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -767,31 +767,48 @@ function Clean-GlobalPacks {
 function Run-LanguageDiagnostic {
     param ($SpecificChannelDir = $null)
     
+    $idsToCheck = [System.Collections.Generic.HashSet[string]]::new()
+    $currentBL = Get-Content -LiteralPath $BlacklistPath
+    
     if (!$SpecificChannelDir) {
         Write-Host "`n=================================================" -ForegroundColor Cyan
         Write-Host "   DIAGNOSTIC DE LANGUE ET FILTRAGE AUTO" -ForegroundColor Cyan
         Write-Host "=================================================" -ForegroundColor Cyan
-    }
-    
-    $idsToCheck = [System.Collections.Generic.HashSet[string]]::new()
-    
-    if ($SpecificChannelDir) {
+        
+        Write-Host "  Quelles vidéos analyser ?" -ForegroundColor White
+        Write-Host "  1. Nouveaux IDs (missing_videos.txt, 429_errors.txt)"
+        Write-Host "  2. Catégorie spécifique Blacklist (ex: [TO-REVIEW] ou [SUB-KO])"
+        Write-Host "  3. Manuel (Saisir un ID)"
+        $diagChoice = Read-Host "`n  Choix (1-3)"
+        
+        if ($diagChoice -eq "2") {
+            $tag = Read-Host "  Saisir le tag exact (ex: [TO-REVIEW])"
+            $currentBL | Where-Object { $_ -match [regex]::Escape($tag) } | ForEach-Object {
+                $id = ($_ -split " #")[0].Trim()
+                if ($id -match "^[a-zA-Z0-9_-]{11}$") { [void]$idsToCheck.Add($id) }
+            }
+            $idsToProcess = $idsToCheck # On autorise a traiter des IDs deja dans la BL si on demande explicitement une categorie
+        }
+        elseif ($diagChoice -eq "3") {
+            $manualId = Read-Host "  Saisir l'ID YouTube"
+            if ($manualId -match "^[a-zA-Z0-9_-]{11}$") { [void]$idsToCheck.Add($manualId) }
+            $idsToProcess = $idsToCheck
+        }
+        else {
+            $log429 = Join-Path $LogsDir "429_errors.txt"
+            if (Test-Path -LiteralPath $log429) { foreach ($line in Get-Content -LiteralPath $log429) { if ($line -match "^([a-zA-Z0-9_-]{11})") { [void]$idsToCheck.Add($Matches[1]) } } }
+            foreach ($f in Get-ChildItem -LiteralPath $BaseDir -Recurse -Filter "missing_videos.txt") { foreach ($id in Get-Content -LiteralPath $f.FullName) { if ($id -match "^[a-zA-Z0-9_-]{11}$") { [void]$idsToCheck.Add($id) } } }
+            $idsToProcess = $idsToCheck | Where-Object { $currentBL -notmatch [regex]::Escape($_) }
+        }
+    } else {
         $missingPath = Join-Path $SpecificChannelDir "missing_videos.txt"
         if (Test-Path -LiteralPath $missingPath) {
             foreach ($id in Get-Content -LiteralPath $missingPath) {
                 if ($id -match "^[a-zA-Z0-9_-]{11}$") { [void]$idsToCheck.Add($id) }
             }
         }
-    } else {
-        $log429 = Join-Path $LogsDir "429_errors.txt"
-        if (Test-Path -LiteralPath $log429) { foreach ($line in Get-Content -LiteralPath $log429) { if ($line -match "^([a-zA-Z0-9_-]{11})") { [void]$idsToCheck.Add($Matches[1]) } } }
-        foreach ($f in Get-ChildItem -LiteralPath $BaseDir -Recurse -Filter "missing_videos.txt") { foreach ($id in Get-Content -LiteralPath $f.FullName) { if ($id -match "^[a-zA-Z0-9_-]{11}$") { [void]$idsToCheck.Add($id) } } }
+        $idsToProcess = $idsToCheck | Where-Object { $currentBL -notmatch [regex]::Escape($_) }
     }
-
-    if ($idsToCheck.Count -eq 0) { return }
-
-    $currentBL = Get-Content -LiteralPath $BlacklistPath
-    $idsToProcess = $idsToCheck | Where-Object { $currentBL -notmatch [regex]::Escape($_) }
     
     $idsToProcess | ForEach-Object -Parallel {
         $id = $_
@@ -822,9 +839,32 @@ function Run-ReSubtitling {
     Write-Host "=================================================" -ForegroundColor Cyan
     
     $blContent = Get-Content -LiteralPath $BlacklistPath
-    $idsToProcess = $blContent | Where-Object { $_ -match "Aucun sous-titre|no subtitles|\[SUB-MISSING\]|\[SUB-KO\]|\[FORCE RE-SUB" -and $_ -notmatch "\[RE-SUB-VIDEO\]|\[INACCESSIBLE" } | ForEach-Object { ($_ -split " #")[0].Trim() }
     
-    if ($idsToProcess.Count -eq 0) { Write-Log "Aucune video a re-sous-titrer." "Green"; return }
+    Write-Host "  Quelles vidéos re-sous-titrer ?" -ForegroundColor White
+    Write-Host "  1. [SUB-MISSING] uniquement (Absence de ST)"
+    Write-Host "  2. [SUB-KO] uniquement (Mauvaise langue)"
+    Write-Host "  3. [TO-REVIEW] uniquement (Vidéos à valeur ajoutée)"
+    Write-Host "  4. TOUT (Missing + KO + TO-REVIEW + FORCE)"
+    Write-Host "  5. Manuel (Saisir un ID)"
+    $resubChoice = Read-Host "`n  Choix (1-5)"
+    
+    $filter = switch ($resubChoice) {
+        "1" { "\[SUB-MISSING\]" }
+        "2" { "\[SUB-KO\]" }
+        "3" { "\[TO-REVIEW\]" }
+        "4" { "Aucun sous-titre|no subtitles|\[SUB-MISSING\]|\[SUB-KO\]|\[TO-REVIEW\]|\[FORCE RE-SUB" }
+        "5" { "MANUAL" }
+        default { return }
+    }
+
+    if ($filter -eq "MANUAL") {
+        $manualId = Read-Host "  Saisir l'ID YouTube"
+        if ($manualId -match "^[a-zA-Z0-9_-]{11}$") { $idsToProcess = @($manualId) } else { return }
+    } else {
+        $idsToProcess = $blContent | Where-Object { $_ -match $filter -and $_ -notmatch "\[RE-SUB-VIDEO\]|\[INACCESSIBLE" } | ForEach-Object { ($_ -split " #")[0].Trim() }
+    }
+    
+    if (!$idsToProcess -or $idsToProcess.Count -eq 0) { Write-Log "Aucune video correspondant aux criteres." "Green"; return }
     
     Write-Log "$($idsToProcess.Count) videos detectees pour re-subtitling." "Yellow"
     $success = 0; $failed = 0; $idx = 0
@@ -949,7 +989,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v10.6 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v10.7 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
