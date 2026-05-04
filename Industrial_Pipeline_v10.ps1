@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v11.1
+# Industrial YouTube Transcription Pipeline v11.2
 # Unified Industrial Suite for NotebookLM
-# v11.1: Optimized memory usage (procedural loops) and batch limit support for re-subtitling.
+# v11.2: Periodic blacklist save and enhanced resume security (MP4 existence check).
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -893,14 +893,17 @@ function Run-ReSubtitling {
     }
     $success = 0; $failed = 0; $idx = 0
     
+    $batchIdx = 0
     foreach ($id in $idsToProcess) {
-        $idx++; $stats = "[$idx/$($idsToProcess.Count)] [OK: $success | KO: $failed]"
+        $idx++; $batchIdx++; $stats = "[$idx/$($idsToProcess.Count)] [OK: $success | KO: $failed]"
         
         $audioPath = Join-Path $AudioDir "$id.m4a"
         $videoPath = Join-Path $OutputDir "$id.mp4"
         
+        # Securite Reprise : Si le MP4 existe deja, on marque comme fait et on skip
         if (Test-Path -LiteralPath $videoPath) {
             Write-Log "$stats Skip (Déjà généré) : $id" "Green"
+            Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true
             $success++; continue
         }
 
@@ -909,7 +912,7 @@ function Run-ReSubtitling {
         # Audio
         if (!(Test-Path -LiteralPath $audioPath)) {
             & $YtDlp --user-agent $userAgent --quiet --no-warnings -f "bestaudio[ext=m4a]/bestaudio" -o $audioPath "https://www.youtube.com/watch?v=$id"
-            if (Test-Path -LiteralPath $audioPath) { Update-BlacklistEntry -id $id -marker "[RE-SUB-AUDIO]" }
+            if (Test-Path -LiteralPath $audioPath) { Update-BlacklistEntry -id $id -marker "[RE-SUB-AUDIO]" -NoFlush $true }
         }
         
         # Video 1fps
@@ -926,11 +929,15 @@ function Run-ReSubtitling {
             }
         }
         
-        # On passe NoFlush=true pour eviter les I/O excessifs sur Drive
-        if (Test-Path -LiteralPath $videoPath) { $success++; Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true } else { $failed++ }
+        if (Test-Path -LiteralPath $videoPath) { 
+            $success++; Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true 
+        } else { $failed++ }
+
+        # Sauvegarde periodique de la blacklist (toutes les 10 videos) pour securite crash
+        if ($batchIdx % 10 -eq 0) { Flush-BlacklistUpdates }
     }
     
-    # On vide le buffer de la blacklist une seule fois a la fin
+    # On vide le buffer final
     Flush-BlacklistUpdates
 }
 
@@ -1023,7 +1030,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v11.1 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v11.2 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
