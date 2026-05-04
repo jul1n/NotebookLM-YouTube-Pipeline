@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.3
+# Industrial YouTube Transcription Pipeline v12.3.1
 # Unified Industrial Suite for NotebookLM
-# v12.3: Improved re-subtitling loop stability and explicit progress logging.
+# v12.3.1: Robust channel folder detection for Master Inventory (handles spaces and underscores).
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -984,9 +984,22 @@ function Export-MasterInventory {
 
     foreach ($chan in $channels) {
         $logPrefix = $chan.Prefixe
-        $folder = ($chan.Prefixe -replace "[^a-zA-Z0-9]", "_").Trim()
-        $cDir = Join-Path $BaseDir $folder
-        if (!(Test-Path $cDir)) { 
+        
+        # On tente plusieurs variantes de nom de dossier pour etre sur de trouver la chaine
+        $folderCandidates = @(
+            $chan.Prefixe.Trim(),                                     # Original "Oussama Ammar"
+            ($chan.Prefixe -replace "[^a-zA-Z0-9 ]", "").Trim(),      # "Oussama Ammar" (sanitized)
+            ($chan.Prefixe -replace "[^a-zA-Z0-9]", "_").Trim(),      # "Oussama_Ammar"
+            ($chan.Prefixe -replace "\s+", "_").Trim()                # "Oussama_Ammar"
+        ) | Select-Object -Unique
+        
+        $cDir = $null
+        foreach ($f in $folderCandidates) {
+            $path = Join-Path $BaseDir $f
+            if (Test-Path -LiteralPath $path) { $cDir = $path; break }
+        }
+
+        if (!$cDir) { 
             Write-Host "  [!] Dossier absent pour : $logPrefix" -ForegroundColor Yellow
             continue 
         }
@@ -1102,7 +1115,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v12.3 Unified             ║" -ForegroundColor White
+    Write-Host "  ║            Industrial Pipeline v12.3.1 Unified            ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
