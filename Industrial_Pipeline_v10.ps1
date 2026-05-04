@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.6
+# Industrial YouTube Transcription Pipeline v12.6.1
 # Unified Industrial Suite for NotebookLM
-# v12.6: Fixed header alignment and deep diagnostic traces for re-subtitling.
+# v12.6.1: Fixed header alignment and per-iteration deep diagnostics for re-subtitling.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -927,35 +927,34 @@ function Run-ReSubtitling {
     
     $success = 0; $failed = 0; $idx = 0; $batchIdx = 0
     
-    try {
-        for ($i=0; $i -lt $finalIds.Count; $i++) {
-            $id = $finalIds[$i]
-            $idx = $i + 1; $batchIdx = $idx
-            $stats = "[$idx/$($finalIds.Count)] [OK: $success | KO: $failed]"
-            
-            Write-Host "  [TRACE] Debut loop ($idx/$($finalIds.Count)) pour ID: $id" -ForegroundColor Gray
-            
+    for ($i=0; $i -lt $finalIds.Count; $i++) {
+        $id = $finalIds[$i]; $idx = $i + 1; $batchIdx = $idx
+        $stats = "[$idx/$($finalIds.Count)] [OK: $success | KO: $failed]"
+        Write-Host "`n  [TRACE] Debut loop ($idx/$($finalIds.Count)) pour ID: $id" -ForegroundColor Gray
+        
+        try {
             $audioPath = Join-Path $AudioDir "$id.m4a"
             $videoPath = Join-Path $OutputDir "$id.mp4"
             
             # Securite Reprise : Si le MP4 existe deja, on marque comme fait et on skip
             if (Test-Path -LiteralPath $videoPath) {
-                Write-Log "$stats Skip (Déjà généré) : $id" "Green"
+                Write-Host "  $stats Skip (Déjà généré) : $id" -ForegroundColor Green
                 Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true
                 $success++; continue
             }
 
-            Write-Log "$stats Traitement : $id" "Cyan"
+            Write-Host "  $stats Traitement : $id" -ForegroundColor Cyan
         
             # Audio
             if (!(Test-Path -LiteralPath $audioPath)) {
+                Write-Host "  [DEBUG] Download Audio via yt-dlp..." -ForegroundColor Gray
                 & $YtDlp --user-agent $userAgent --quiet --no-warnings -f "bestaudio[ext=m4a]/bestaudio" -o $audioPath "https://www.youtube.com/watch?v=$id"
                 if (Test-Path -LiteralPath $audioPath) { Update-BlacklistEntry -id $id -marker "[RE-SUB-AUDIO]" -NoFlush $true }
             }
             
             # Video 1fps
             if ((Test-Path -LiteralPath $audioPath) -and !(Test-Path -LiteralPath $videoPath)) {
-                # On recupere la vignette
+                Write-Host "  [DEBUG] Generation Video via ffmpeg..." -ForegroundColor Gray
                 & $ytDlp --user-agent $userAgent --quiet --no-warnings --write-thumbnail --skip-download -o (Join-Path $ThumbDir $id) "https://www.youtube.com/watch?v=$id"
                 $thumb = Get-ChildItem -LiteralPath $ThumbDir -Filter "$id.*" | Where-Object { $_.Extension -ne ".m4a" } | Select-Object -First 1
                 $tIn = if ($thumb) { $thumb.FullName } else { "color=c=black:s=1280x720:r=1" }
@@ -969,13 +968,16 @@ function Run-ReSubtitling {
             
             if (Test-Path -LiteralPath $videoPath) { 
                 $success++; Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true 
-            } else { $failed++ }
+            } else { 
+                $failed++ 
+                Write-Host "  [!] ECHEC : La video n'a pas pu être générée pour $id" -ForegroundColor Yellow
+            }
 
-            # Sauvegarde periodique de la blacklist (toutes les 10 videos) pour securite crash
             if ($batchIdx % 10 -eq 0) { Flush-BlacklistUpdates }
+        } catch {
+            Write-Host "  [!!!] ERREUR FATALE ID $id : $($_.Exception.Message)" -ForegroundColor Red
+            $failed++
         }
-    } catch {
-        Write-Host "`n[!] ERREUR DANS LA BOUCLE : $_" -ForegroundColor Red
     }
     
     # On vide le buffer final et on synchronise vers le Drive
