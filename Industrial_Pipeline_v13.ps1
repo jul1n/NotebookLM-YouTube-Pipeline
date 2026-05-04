@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v13.2.1
+# Industrial YouTube Transcription Pipeline v13.2.2
 # Unified Industrial Suite for NotebookLM
-# v13.2.1: Streamlined re-subtitling UI with cleaner status lines.
+# v13.2.2: Added [FORCE] category as a standalone option in re-subtitling.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -872,16 +872,18 @@ function Run-ReSubtitling {
     Write-Host "  1. [SUB-MISSING] uniquement (Absence de ST)"
     Write-Host "  2. [SUB-KO] uniquement (Mauvaise langue)"
     Write-Host "  3. [TO-REVIEW] uniquement (Vidéos à valeur ajoutée)"
-    Write-Host "  4. TOUT (Missing + KO + TO-REVIEW + FORCE)"
-    Write-Host "  5. Manuel (Saisir un ID)"
-    $resubChoice = Read-Host "`n  Choix (1-5)"
+    Write-Host "  4. [FORCE] uniquement (Forçage manuel)"
+    Write-Host "  5. TOUT (Missing + KO + TO-REVIEW + FORCE)"
+    Write-Host "  6. Manuel (Saisir un ID)"
+    $resubChoice = Read-Host "`n  Choix (1-6)"
     
     $filter = switch ($resubChoice) {
         "1" { "\[SUB-MISSING\]" }
         "2" { "\[SUB-KO\]" }
         "3" { "\[TO-REVIEW\]" }
-        "4" { "Aucun sous-titre|no subtitles|\[SUB-MISSING\]|\[SUB-KO\]|\[TO-REVIEW\]|\[FORCE RE-SUB" }
-        "5" { "MANUAL" }
+        "4" { "\[FORCE\]" }
+        "5" { "Aucun sous-titre|no subtitles|\[SUB-MISSING\]|\[SUB-KO\]|\[TO-REVIEW\]|\[FORCE" }
+        "6" { "MANUAL" }
         default { Write-Host "  [DEBUG] Choix invalide ($resubChoice). Retour."; return }
     }
     Write-Host "  [DEBUG] Filtre selectionne : $filter" -ForegroundColor Gray
@@ -1185,7 +1187,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "`n  ============================================================" -ForegroundColor Magenta
-    Write-Host "             INDUSTRIAL PIPELINE v13.2.1 UNIFIED" -ForegroundColor White
+    Write-Host "             INDUSTRIAL PIPELINE v13.2.2 UNIFIED" -ForegroundColor White
     Write-Host "  ============================================================`n" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
