@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.8
+# Industrial YouTube Transcription Pipeline v10.9
 # Unified Industrial Suite for NotebookLM
-# v10.8: Ultra-robust VTT cleaning & mandatory RAW re-download on artifact detection.
+# v10.9: Intelligent auto-heal (Local re-processing priority to avoid YouTube re-downloads).
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -592,18 +592,22 @@ function Repair-Packs {
             if ($isDirty) {
                 Write-Host "    [!] $reason dans le texte : $($f.Name)" -ForegroundColor Red
                 $corruptedCount++
-                $needDownload = $true
                 
                 # Identification de l'ID pour tout nettoyer d'un coup
                 $id = if ($f.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $Matches[1] }
                 
                 if ($id) {
                     # On supprime TOUTES les versions texte derivees pour cet ID (RAW TXT, DENSE, etc.)
+                    # Cela forcera la reconstruction locale a partir du RAW existant (sans re-telecharger)
                     $derivedFiles = Get-ChildItem -Path $BaseDir -Recurse -File | Where-Object { $_.Name -match "\[$id\]" -and $_.Extension -eq ".txt" }
                     foreach ($df in $derivedFiles) { Remove-Item -LiteralPath $df.FullName -Force -ErrorAction SilentlyContinue }
                     
-                    # On supprime aussi le RAW (info.json, vtt) pour forcer le re-telechargement.
-                    Get-ChildItem -LiteralPath $rawDir | Where-Object { $_.Name.Contains($id) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue
+                    # On ne supprime le RAW que si c'est une fuite JSON (source probablement corrompue)
+                    if ($reason -eq "Fuite JSON") {
+                        Write-Host "      [!] Source corrompue suspectee. Marquage pour re-telechargement." -ForegroundColor Yellow
+                        $needDownload = $true
+                        Get-ChildItem -LiteralPath $rawDir | Where-Object { $_.Name.Contains($id) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue
+                    }
                 } else {
                     # Si pas d'ID trouve dans le nom du fichier DENSE, on supprime au moins ce fichier corrompu
                     Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
@@ -993,7 +997,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v10.8 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v10.9 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
