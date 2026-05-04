@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.7
+# Industrial YouTube Transcription Pipeline v10.8
 # Unified Industrial Suite for NotebookLM
-# v10.7: Targeted category processing for Language Diagnostic and Re-subtitling.
+# v10.8: Ultra-robust VTT cleaning & mandatory RAW re-download on artifact detection.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -425,10 +425,12 @@ function Process-LocalFiles {
                 $txt = $txt -replace 'WEBVTT|Kind: captions|Language: \S+', '' # Headers
                 
                 # Suppression globale des timestamps et des infos de positionnement
-                # On couvre plusieurs formats (avec ou sans heures, virgule ou point)
-                $tsRegex = '\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}'
+                # On couvre plusieurs formats (avec ou sans heures, virgule ou point, millisecondes facultatives)
+                $tsRegex = '\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?'
                 $txt = $txt -replace $tsRegex, ' '
-                $txt = $txt -replace 'align:\S+|position:\S+|line:\S+|size:\S+|region:\S+', ' '
+                $txt = $txt -replace 'align:\S+|position:\S+|line:\S+|size:\S+|region:\S+|<.*?>', ' '
+                $txt = $txt -replace '&\w+;', ' ' # Entites HTML comme &nbsp;
+
                 
                 # Nettoyage des indices numeriques seuls (souvent presents dans SRT/VTT)
                 $txt = $txt -replace '(?m)^\d+\s*$', ''
@@ -589,6 +591,8 @@ function Repair-Packs {
 
             if ($isDirty) {
                 Write-Host "    [!] $reason dans le texte : $($f.Name)" -ForegroundColor Red
+                $corruptedCount++
+                $needDownload = $true
                 
                 # Identification de l'ID pour tout nettoyer d'un coup
                 $id = if ($f.Name -match "\[([a-zA-Z0-9_-]{11})\]") { $Matches[1] }
@@ -597,12 +601,12 @@ function Repair-Packs {
                     # On supprime TOUTES les versions texte derivees pour cet ID (RAW TXT, DENSE, etc.)
                     $derivedFiles = Get-ChildItem -Path $BaseDir -Recurse -File | Where-Object { $_.Name -match "\[$id\]" -and $_.Extension -eq ".txt" }
                     foreach ($df in $derivedFiles) { Remove-Item -LiteralPath $df.FullName -Force -ErrorAction SilentlyContinue }
-                    $corruptedCount++
-                }
-
-                # Pour les fuites JSON (corruption de structure), on supprime aussi le RAW pour forcer le re-telechargement.
-                if ($reason -eq "Fuite JSON" -and $id) {
+                    
+                    # On supprime aussi le RAW (info.json, vtt) pour forcer le re-telechargement.
                     Get-ChildItem -LiteralPath $rawDir | Where-Object { $_.Name.Contains($id) } | Remove-Item -LiteralPath { $_.FullName } -Force -ErrorAction SilentlyContinue
+                } else {
+                    # Si pas d'ID trouve dans le nom du fichier DENSE, on supprime au moins ce fichier corrompu
+                    Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
                 }
             }
         }
@@ -989,7 +993,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v10.7 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v10.8 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
