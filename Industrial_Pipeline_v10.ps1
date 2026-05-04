@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v11.0
+# Industrial YouTube Transcription Pipeline v11.1
 # Unified Industrial Suite for NotebookLM
-# v11.0: Radical VTT cleaning (line-based removal) and total alignment with integrity check.
+# v11.1: Optimized memory usage (procedural loops) and batch limit support for re-subtitling.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -114,10 +114,10 @@ function Get-SafeContent {
     }
 }
 
-function Update-BlacklistEntry($id, $marker, $metadata = "") {
+function Update-BlacklistEntry($id, $marker, $metadata = "", $NoFlush = $false) {
     if (!(Test-Path $BlacklistPath)) { return }
     $global:pendingBlacklistUpdates.Add([PSCustomObject]@{ ID=$id; Marker=$marker; Metadata=$metadata })
-    Flush-BlacklistUpdates
+    if (!$NoFlush) { Flush-BlacklistUpdates }
 }
 
 function Flush-BlacklistUpdates {
@@ -868,16 +868,29 @@ function Run-ReSubtitling {
     }
 
     Write-Host "  Analyse des entrées... (Patientez)" -ForegroundColor Gray
+    $idsToProcess = [System.Collections.Generic.List[string]]::new()
     if ($filter -eq "MANUAL") {
         $manualId = Read-Host "  Saisir l'ID YouTube"
-        if ($manualId -match "^[a-zA-Z0-9_-]{11}$") { $idsToProcess = @($manualId) } else { return }
+        if ($manualId -match "^[a-zA-Z0-9_-]{11}$") { $idsToProcess.Add($manualId) } else { return }
     } else {
-        $idsToProcess = $blContent | Where-Object { $_ -match $filter -and $_ -notmatch "\[RE-SUB-VIDEO\]|\[INACCESSIBLE" } | ForEach-Object { ($_ -split " #")[0].Trim() }
+        foreach ($line in $blContent) {
+            if ($line -match $filter -and $line -notmatch "\[RE-SUB-VIDEO\]|\[INACCESSIBLE") {
+                $id = ($line -split " #")[0].Trim()
+                if ($id -match "^[a-zA-Z0-9_-]{11}$") { $idsToProcess.Add($id) }
+            }
+        }
     }
     
-    if (!$idsToProcess -or $idsToProcess.Count -eq 0) { Write-Log "Aucune video correspondant aux criteres." "Green"; return }
-    
-    Write-Log "$($idsToProcess.Count) videos detectees pour re-subtitling." "Yellow"
+    if ($idsToProcess.Count -eq 0) { Write-Log "Aucune video correspondant aux criteres." "Green"; return }
+
+    # Ajout d'une limite optionnelle pour eviter de saturer le systeme
+    Write-Host "  $($idsToProcess.Count) vidéos détectées." -ForegroundColor Yellow
+    Write-Host "  Combien de vidéos traiter dans cette session ? (Entrée pour TOUT)" -ForegroundColor White
+    $limit = Read-Host "  Limite"
+    if ($limit -as [int]) { 
+        $limitVal = [int]$limit
+        $idsToProcess = $idsToProcess | Select-Object -First $limitVal
+    }
     $success = 0; $failed = 0; $idx = 0
     
     foreach ($id in $idsToProcess) {
@@ -913,8 +926,12 @@ function Run-ReSubtitling {
             }
         }
         
-        if (Test-Path -LiteralPath $videoPath) { $success++; Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" } else { $failed++ }
+        # On passe NoFlush=true pour eviter les I/O excessifs sur Drive
+        if (Test-Path -LiteralPath $videoPath) { $success++; Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true } else { $failed++ }
     }
+    
+    # On vide le buffer de la blacklist une seule fois a la fin
+    Flush-BlacklistUpdates
 }
 
 # ==============================================================================
@@ -1006,7 +1023,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v11.0 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v11.1 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
