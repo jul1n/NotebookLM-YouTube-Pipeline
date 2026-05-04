@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v13.0
+# Industrial YouTube Transcription Pipeline v13.1
 # Unified Industrial Suite for NotebookLM
-# v13.0: Global Safe I/O implementation (fixes all 'file in use' errors on Drive).
+# v13.1: Automatic 'Move from Blacklist to Upload List' logic for processed videos.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -936,6 +936,8 @@ function Run-ReSubtitling {
     $localWork = Join-Path $env:TEMP "Industrial_Work_Local"
     if (!(Test-Path $localWork)) { New-Item -ItemType Directory -Path $localWork -Force | Out-Null }
 
+    $processedIds = [System.Collections.Generic.List[string]]::new()
+
     for ($i=0; $i -lt $finalIds.Count; $i++) {
         $id = $finalIds[$i]; $idx = $i + 1; $batchIdx = $idx
         $stats = "[$idx/$($finalIds.Count)] [OK: $success | KO: $failed]"
@@ -948,12 +950,11 @@ function Run-ReSubtitling {
             # Chemins locaux temporaires
             $tmpAudio = Join-Path $localWork "$id.m4a"
             $tmpVideo = Join-Path $localWork "$id.mp4"
-            $tmpThumb = Join-Path $localWork "$id.jpg"
-
-            # Securite Reprise : Si le MP4 existe deja, on marque comme fait et on skip
+            
+            # Securite Reprise : Si le MP4 existe deja, on considere comme traite
             if (Test-Path -LiteralPath $videoPath) {
                 Write-Host "  $stats Skip (Déjà généré) : $id" -ForegroundColor Green
-                Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true
+                $processedIds.Add($id)
                 if ($id -notin $toUpload) { $toUpload.Add($id) }
                 $success++; continue
             }
@@ -962,20 +963,14 @@ function Run-ReSubtitling {
         
             # 1. Recuperation Audio (Local)
             if (Test-Path -LiteralPath $audioPath) {
-                Write-Host "  [DEBUG] Copie Audio Drive -> Local..." -ForegroundColor Gray
                 Copy-Item -LiteralPath $audioPath -Destination $tmpAudio -Force
             } else {
-                Write-Host "  [DEBUG] Download Audio direct local..." -ForegroundColor Gray
                 & $YtDlp --user-agent $userAgent --quiet --no-warnings -f "bestaudio[ext=m4a]/bestaudio" -o $tmpAudio "https://www.youtube.com/watch?v=$id"
-                if (Test-Path -LiteralPath $tmpAudio) { 
-                    Copy-Item -LiteralPath $tmpAudio -Destination $audioPath -Force 
-                    Update-BlacklistEntry -id $id -marker "[RE-SUB-AUDIO]" -NoFlush $true
-                }
+                if (Test-Path -LiteralPath $tmpAudio) { Copy-Item -LiteralPath $tmpAudio -Destination $audioPath -Force }
             }
             
             # 2. Video 1fps (Local)
-            if ((Test-Path -LiteralPath $tmpAudio) -and !(Test-Path -LiteralPath $videoPath)) {
-                Write-Host "  [DEBUG] Generation Video local (FFmpeg)..." -ForegroundColor Gray
+            if (Test-Path -LiteralPath $tmpAudio) {
                 & $ytDlp --user-agent $userAgent --quiet --no-warnings --write-thumbnail --skip-download -o (Join-Path $localWork $id) "https://www.youtube.com/watch?v=$id"
                 $thumb = Get-ChildItem -LiteralPath $localWork -Filter "$id.*" | Where-Object { $_.Extension -match "jpg|png|webp|jpeg" } | Select-Object -First 1
                 $tIn = if ($thumb) { $thumb.FullName } else { "color=c=black:s=1280x720:r=1" }
@@ -989,16 +984,14 @@ function Run-ReSubtitling {
             
             # 3. Synchro finale vers Drive
             if (Test-Path -LiteralPath $tmpVideo) { 
-                Write-Host "  [DEBUG] Transfert Video Local -> Drive..." -ForegroundColor Gray
                 Move-Item -LiteralPath $tmpVideo -Destination $videoPath -Force
-                $success++; Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true 
+                $success++; $processedIds.Add($id)
                 if ($id -notin $toUpload) { $toUpload.Add($id) }
             } else { 
                 $failed++ 
                 Write-Host "  [!] ECHEC : La video n'a pas pu être générée pour $id" -ForegroundColor Yellow
             }
 
-            # Nettoyage local de l'ID courant
             Get-ChildItem -LiteralPath $localWork -Filter "$id*" | Remove-Item -Force -ErrorAction SilentlyContinue
             if ($batchIdx % 10 -eq 0) { Flush-BlacklistUpdates }
         } catch {
@@ -1007,16 +1000,30 @@ function Run-ReSubtitling {
         }
     }
     
-    # On vide le buffer final et on synchronise vers le Drive
-    Flush-BlacklistUpdates
+    # Synchronisation finale et suppression de la blacklist
+    Flush-BlacklistUpdates # Flush les updates en attente
+    
+    Write-Host "  [SYSTEME] Nettoyage de la blacklist..." -ForegroundColor Gray
+    $currentBl = [System.IO.File]::ReadAllLines($localBuffer)
+    $newBl = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in $currentBl) {
+        $idInLine = if ($line -match "^([a-zA-Z0-9_-]{11})") { $Matches[1] } else { $null }
+        if ($idInLine -and $processedIds.Contains($idInLine)) {
+            continue # On supprime l'ID traite
+        }
+        $newBl.Add($line)
+    }
+    [System.IO.File]::WriteAllLines($localBuffer, $newBl)
+    
+    # Copie finale vers Drive
     Copy-Item -LiteralPath $localBuffer -Destination $BlacklistPath -Force
     $global:CurrentBlacklistPath = $BlacklistPath
     
-    # Sauvegarde de la liste d'upload (ID uniques)
+    # Sauvegarde de la liste d'upload
     $finalToUpload = @($toUpload | Select-Object -Unique)
     [System.IO.File]::WriteAllLines($uploadFile, $finalToUpload)
     
-    Write-Host "`n  [OK] Blacklist synchronisée." -ForegroundColor Green
+    Write-Host "`n  [OK] Blacklist mise à jour (vidéos traitées supprimées)." -ForegroundColor Green
     Write-Host "  [OK] Liste d'upload mise à jour : $($finalToUpload.Count) vidéos prêtes dans a_uploader.txt" -ForegroundColor Cyan
 }
 
@@ -1177,7 +1184,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "`n  ============================================================" -ForegroundColor Magenta
-    Write-Host "             INDUSTRIAL PIPELINE v13.0 UNIFIED" -ForegroundColor White
+    Write-Host "             INDUSTRIAL PIPELINE v13.1 UNIFIED" -ForegroundColor White
     Write-Host "  ============================================================`n" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
