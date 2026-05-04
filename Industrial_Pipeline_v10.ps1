@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.2
+# Industrial YouTube Transcription Pipeline v12.2.1
 # Unified Industrial Suite for NotebookLM
-# v12.2: Native .NET I/O (WriteAllLines) and pipeline-free loop to kill buffer errors.
+# v12.2.1: Enriched Master Inventory (Duration, Language, Pack mapping).
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -1015,25 +1015,41 @@ function Export-MasterInventory {
             }
         }
 
+        # Cache des packs pour savoir ou est chaque video
+        $packMap = @{}
+        $p4 = Join-Path $cDir "4_Packs"
+        if (Test-Path $p4) {
+            Get-ChildItem -Path $p4 -Filter "*.txt" | ForEach-Object {
+                $pName = $_.BaseName
+                $pContent = [System.IO.File]::ReadAllText($_.FullName)
+                $matches = [regex]::Matches($pContent, "\[([a-zA-Z0-9_-]{11})\]")
+                foreach ($m in $matches) { $packMap[$m.Groups[1].Value] = $pName }
+            }
+        }
+
         foreach ($id in $masterIds) {
             $id = $id.Trim()
             if ([string]::IsNullOrWhiteSpace($id)) { continue }
             
             $status = "DETECTED (ON YT)"
-            $reason = ""
-            $wordCount = 0
-            $title = ""
-            $date = ""
+            $reason = ""; $wordCount = 0; $title = ""; $date = ""; $duration = ""; $lang = ""
             
-            # Recuperation du Titre / Date via le nom du fichier RAW s'il existe
+            # Recuperation du Titre / Date / Duree via le RAW s'il existe
             if ($rawFiles.ContainsKey($id)) {
-                $fName = [System.IO.Path]::GetFileNameWithoutExtension($rawFiles[$id])
-                # Format: 20220125 - Title [ID]
+                $fPath = $rawFiles[$id]
+                $fName = [System.IO.Path]::GetFileNameWithoutExtension($fPath)
                 if ($fName -match "^(\d{8})\s*-\s*(.*)\s+\[$id\]") {
                     $date = $Matches[1]; $title = $Matches[2]
                 } elseif ($fName -match "^(.*)\s+\[$id\]") {
                     $title = $Matches[1]
                 }
+                
+                # Extraction ultra-rapide de la duree et langue du JSON (sans parse complet)
+                try {
+                    $jsonSample = [System.IO.File]::ReadAllText($fPath)
+                    if ($jsonSample -match '"duration":\s*(\d+)') { $duration = $Matches[1] }
+                    if ($jsonSample -match '"language":\s*"(.*?)"') { $lang = $Matches[1] }
+                } catch {}
             }
 
             if ($blMap.ContainsKey($id)) {
@@ -1043,9 +1059,7 @@ function Export-MasterInventory {
                 $status = "SUCCESS (DENSE)"
                 try {
                     $content = [System.IO.File]::ReadAllText($denseFiles[$id])
-                    # Tentative de recup titre si vide
                     if (!$title -and $content -match "TITLE: (.*)") { $title = $Matches[1].Trim() }
-                    
                     $parts = $content -split "`r`n`r`n", 2
                     if ($parts.Count -gt 1) {
                         $wordCount = ($parts[1] -split "\s+" | Where-Object { $_ -ne "" }).Count
@@ -1058,13 +1072,16 @@ function Export-MasterInventory {
             }
 
             [void]$inventory.Add([PSCustomObject]@{
-                Channel = $logPrefix
-                Date    = $date
-                Title   = $title
-                VideoID = $id
-                Status  = $status
-                Reason  = $reason
-                Words   = $wordCount
+                Channel  = $logPrefix
+                Date     = $date
+                Title    = $title
+                Duration = $duration
+                Lang     = $lang
+                VideoID  = $id
+                Status   = $status
+                Reason   = $reason
+                Words    = $wordCount
+                Pack     = if ($packMap.ContainsKey($id)) { $packMap[$id] } else { "" }
             })
         }
     }
@@ -1081,7 +1098,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v12.2 Unified             ║" -ForegroundColor White
+    Write-Host "  ║            Industrial Pipeline v12.2.1 Unified            ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
