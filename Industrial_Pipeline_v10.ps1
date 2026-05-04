@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.3.1
+# Industrial YouTube Transcription Pipeline v12.4
 # Unified Industrial Suite for NotebookLM
-# v12.3.1: Robust channel folder detection for Master Inventory (handles spaces and underscores).
+# v12.4: Deep diagnostic logs for re-subtitling (path tracking + try/catch).
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -906,22 +906,26 @@ function Run-ReSubtitling {
     if ($finalIds.Count -eq 0) { Write-Log "Aucun ID final a traiter." "Yellow"; return }
 
     Write-Host "`n  [DEMARRAGE] Traitement de $($finalIds.Count) vidéos..." -ForegroundColor Cyan
+    Write-Host "  Dossier Audio : $AudioDir" -ForegroundColor Gray
+    Write-Host "  Dossier Vidéo : $OutputDir" -ForegroundColor Gray
+    
     $success = 0; $failed = 0; $idx = 0; $batchIdx = 0
     
-    foreach ($id in $finalIds) {
-        $idx++; $batchIdx++; $stats = "[$idx/$($finalIds.Count)] [OK: $success | KO: $failed]"
-        
-        $audioPath = Join-Path $AudioDir "$id.m4a"
-        $videoPath = Join-Path $OutputDir "$id.mp4"
-        
-        # Securite Reprise : Si le MP4 existe deja, on marque comme fait et on skip
-        if (Test-Path -LiteralPath $videoPath) {
-            Write-Log "$stats Skip (Déjà généré) : $id" "Green"
-            Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true
-            $success++; continue
-        }
+    try {
+        foreach ($id in $finalIds) {
+            $idx++; $batchIdx++; $stats = "[$idx/$($finalIds.Count)] [OK: $success | KO: $failed]"
+            
+            $audioPath = Join-Path $AudioDir "$id.m4a"
+            $videoPath = Join-Path $OutputDir "$id.mp4"
+            
+            # Securite Reprise : Si le MP4 existe deja, on marque comme fait et on skip
+            if (Test-Path -LiteralPath $videoPath) {
+                Write-Log "$stats Skip (Déjà généré) : $id" "Green"
+                Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true
+                $success++; continue
+            }
 
-        Write-Log "$stats Traitement : $id" "Cyan"
+            Write-Log "$stats Traitement : $id" "Cyan"
         
         # Audio
         if (!(Test-Path -LiteralPath $audioPath)) {
@@ -949,6 +953,9 @@ function Run-ReSubtitling {
 
         # Sauvegarde periodique de la blacklist (toutes les 10 videos) pour securite crash
         if ($batchIdx % 10 -eq 0) { Flush-BlacklistUpdates }
+    }
+    } catch {
+        Write-Host "`n[!] ERREUR DANS LA BOUCLE : $_" -ForegroundColor Red
     }
     
     # On vide le buffer final et on synchronise vers le Drive
@@ -1115,7 +1122,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║            Industrial Pipeline v12.3.1 Unified            ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v12.4 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
