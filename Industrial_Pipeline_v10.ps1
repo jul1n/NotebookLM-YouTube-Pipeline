@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.9
+# Industrial YouTube Transcription Pipeline v13.0
 # Unified Industrial Suite for NotebookLM
-# v12.9: Local media staging for FFmpeg (fixes 'parser buffer' errors on Drive).
+# v13.0: Global Safe I/O implementation (fixes all 'file in use' errors on Drive).
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -457,7 +457,7 @@ function Process-LocalFiles {
                     
                     # On ne garde que l'essentiel de la meta pour le fichier dense (evite les leaks de 2MB de JSON)
                     try {
-                        $jsonMeta = [System.IO.File]::ReadAllText($json.FullName)
+                        $jsonMeta = (Get-SafeContent $json.FullName) -join "`r`n"
                         $meta = $jsonMeta | ConvertFrom-Json -AsHashTable
                         $compactMeta = @{
                             id = $meta.id
@@ -1100,7 +1100,7 @@ function Export-MasterInventory {
         if (Test-Path $p4) {
             Get-ChildItem -Path $p4 -Filter "*.txt" | ForEach-Object {
                 $pName = $_.BaseName
-                $pContent = [System.IO.File]::ReadAllText($_.FullName)
+                $pContent = (Get-SafeContent $_.FullName) -join "`n"
                 $matches = [regex]::Matches($pContent, "\[([a-zA-Z0-9_-]{11})\]")
                 foreach ($m in $matches) { $packMap[$m.Groups[1].Value] = $pName }
             }
@@ -1125,7 +1125,7 @@ function Export-MasterInventory {
                 
                 # Extraction ultra-rapide de la duree et langue du JSON (sans parse complet)
                 try {
-                    $jsonSample = [System.IO.File]::ReadAllText($fPath)
+                    $jsonSample = (Get-SafeContent $fPath) -join "`r`n"
                     if ($jsonSample -match '"duration":\s*(\d+)') { $duration = $Matches[1] }
                     if ($jsonSample -match '"language":\s*"(.*?)"') { $lang = $Matches[1] }
                 } catch {}
@@ -1137,7 +1137,7 @@ function Export-MasterInventory {
             } elseif ($denseFiles.ContainsKey($id)) {
                 $status = "SUCCESS (DENSE)"
                 try {
-                    $content = [System.IO.File]::ReadAllText($denseFiles[$id])
+                    $content = (Get-SafeContent $denseFiles[$id]) -join "`r`n"
                     if (!$title -and $content -match "TITLE: (.*)") { $title = $Matches[1].Trim() }
                     $parts = $content -split "`r`n`r`n", 2
                     if ($parts.Count -gt 1) {
@@ -1177,7 +1177,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "`n  ============================================================" -ForegroundColor Magenta
-    Write-Host "             INDUSTRIAL PIPELINE v12.9 UNIFIED" -ForegroundColor White
+    Write-Host "             INDUSTRIAL PIPELINE v13.0 UNIFIED" -ForegroundColor White
     Write-Host "  ============================================================`n" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
