@@ -822,7 +822,7 @@ function Run-ReSubtitling {
     Write-Host "=================================================" -ForegroundColor Cyan
     
     $blContent = Get-Content -LiteralPath $BlacklistPath
-    $idsToProcess = $blContent | Where-Object { $_ -match "Aucun sous-titre|no subtitles|\[SUB-MISSING\]|\[FORCE RE-SUB" -and $_ -notmatch "\[RE-SUB-VIDEO\]|\[INACCESSIBLE" } | ForEach-Object { ($_ -split " #")[0].Trim() }
+    $idsToProcess = $blContent | Where-Object { $_ -match "Aucun sous-titre|no subtitles|\[SUB-MISSING\]|\[SUB-KO\]|\[FORCE RE-SUB" -and $_ -notmatch "\[RE-SUB-VIDEO\]|\[INACCESSIBLE" } | ForEach-Object { ($_ -split " #")[0].Trim() }
     
     if ($idsToProcess.Count -eq 0) { Write-Log "Aucune video a re-sous-titrer." "Green"; return }
     
