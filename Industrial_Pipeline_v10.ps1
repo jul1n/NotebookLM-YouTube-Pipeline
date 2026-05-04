@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.8
+# Industrial YouTube Transcription Pipeline v12.9
 # Unified Industrial Suite for NotebookLM
-# v12.8: Automatic 'a_uploader.txt' list generation for videos ready to be published.
+# v12.9: Local media staging for FFmpeg (fixes 'parser buffer' errors on Drive).
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -927,10 +927,14 @@ function Run-ReSubtitling {
     
     $success = 0; $failed = 0; $idx = 0; $batchIdx = 0
     
-    # Buffer pour la liste d'upload
+    # Buffer pour la liste d'upload (a_uploader.txt)
     $toUpload = [System.Collections.Generic.List[string]]::new()
     $uploadFile = Join-Path $BaseDir "a_uploader.txt"
     if (Test-Path $uploadFile) { $toUpload.AddRange([System.IO.File]::ReadAllLines($uploadFile)) }
+
+    # Dossier de travail local pour eviter les erreurs de buffer Drive
+    $localWork = Join-Path $env:TEMP "Industrial_Work_Local"
+    if (!(Test-Path $localWork)) { New-Item -ItemType Directory -Path $localWork -Force | Out-Null }
 
     for ($i=0; $i -lt $finalIds.Count; $i++) {
         $id = $finalIds[$i]; $idx = $i + 1; $batchIdx = $idx
@@ -941,6 +945,11 @@ function Run-ReSubtitling {
             $audioPath = Join-Path $AudioDir "$id.m4a"
             $videoPath = Join-Path $OutputDir "$id.mp4"
             
+            # Chemins locaux temporaires
+            $tmpAudio = Join-Path $localWork "$id.m4a"
+            $tmpVideo = Join-Path $localWork "$id.mp4"
+            $tmpThumb = Join-Path $localWork "$id.jpg"
+
             # Securite Reprise : Si le MP4 existe deja, on marque comme fait et on skip
             if (Test-Path -LiteralPath $videoPath) {
                 Write-Host "  $stats Skip (Déjà généré) : $id" -ForegroundColor Green
@@ -951,28 +960,37 @@ function Run-ReSubtitling {
 
             Write-Host "  $stats Traitement : $id" -ForegroundColor Cyan
         
-            # Audio
-            if (!(Test-Path -LiteralPath $audioPath)) {
-                Write-Host "  [DEBUG] Download Audio via yt-dlp..." -ForegroundColor Gray
-                & $YtDlp --user-agent $userAgent --quiet --no-warnings -f "bestaudio[ext=m4a]/bestaudio" -o $audioPath "https://www.youtube.com/watch?v=$id"
-                if (Test-Path -LiteralPath $audioPath) { Update-BlacklistEntry -id $id -marker "[RE-SUB-AUDIO]" -NoFlush $true }
-            }
-            
-            # Video 1fps
-            if ((Test-Path -LiteralPath $audioPath) -and !(Test-Path -LiteralPath $videoPath)) {
-                Write-Host "  [DEBUG] Generation Video via ffmpeg..." -ForegroundColor Gray
-                & $ytDlp --user-agent $userAgent --quiet --no-warnings --write-thumbnail --skip-download -o (Join-Path $ThumbDir $id) "https://www.youtube.com/watch?v=$id"
-                $thumb = Get-ChildItem -LiteralPath $ThumbDir -Filter "$id.*" | Where-Object { $_.Extension -ne ".m4a" } | Select-Object -First 1
-                $tIn = if ($thumb) { $thumb.FullName } else { "color=c=black:s=1280x720:r=1" }
-                
-                if ($thumb) {
-                    & $Ffmpeg -y -loglevel error -probesize 100M -analyzeduration 100M -loop 1 -framerate 1 -i $tIn -i $audioPath -c:v libx264 -tune stillimage -preset ultrafast -pix_fmt yuv420p -c:a copy -shortest $videoPath
-                } else {
-                    & $Ffmpeg -y -loglevel error -probesize 100M -analyzeduration 100M -f lavfi -i $tIn -i $audioPath -c:v libx264 -tune stillimage -preset ultrafast -pix_fmt yuv420p -c:a copy -shortest $videoPath
+            # 1. Recuperation Audio (Local)
+            if (Test-Path -LiteralPath $audioPath) {
+                Write-Host "  [DEBUG] Copie Audio Drive -> Local..." -ForegroundColor Gray
+                Copy-Item -LiteralPath $audioPath -Destination $tmpAudio -Force
+            } else {
+                Write-Host "  [DEBUG] Download Audio direct local..." -ForegroundColor Gray
+                & $YtDlp --user-agent $userAgent --quiet --no-warnings -f "bestaudio[ext=m4a]/bestaudio" -o $tmpAudio "https://www.youtube.com/watch?v=$id"
+                if (Test-Path -LiteralPath $tmpAudio) { 
+                    Copy-Item -LiteralPath $tmpAudio -Destination $audioPath -Force 
+                    Update-BlacklistEntry -id $id -marker "[RE-SUB-AUDIO]" -NoFlush $true
                 }
             }
             
-            if (Test-Path -LiteralPath $videoPath) { 
+            # 2. Video 1fps (Local)
+            if ((Test-Path -LiteralPath $tmpAudio) -and !(Test-Path -LiteralPath $videoPath)) {
+                Write-Host "  [DEBUG] Generation Video local (FFmpeg)..." -ForegroundColor Gray
+                & $ytDlp --user-agent $userAgent --quiet --no-warnings --write-thumbnail --skip-download -o (Join-Path $localWork $id) "https://www.youtube.com/watch?v=$id"
+                $thumb = Get-ChildItem -LiteralPath $localWork -Filter "$id.*" | Where-Object { $_.Extension -match "jpg|png|webp|jpeg" } | Select-Object -First 1
+                $tIn = if ($thumb) { $thumb.FullName } else { "color=c=black:s=1280x720:r=1" }
+                
+                if ($thumb) {
+                    & $Ffmpeg -y -loglevel error -probesize 100M -analyzeduration 100M -loop 1 -framerate 1 -i $tIn -i $tmpAudio -c:v libx264 -tune stillimage -preset ultrafast -pix_fmt yuv420p -c:a copy -shortest $tmpVideo
+                } else {
+                    & $Ffmpeg -y -loglevel error -probesize 100M -analyzeduration 100M -f lavfi -i $tIn -i $tmpAudio -c:v libx264 -tune stillimage -preset ultrafast -pix_fmt yuv420p -c:a copy -shortest $tmpVideo
+                }
+            }
+            
+            # 3. Synchro finale vers Drive
+            if (Test-Path -LiteralPath $tmpVideo) { 
+                Write-Host "  [DEBUG] Transfert Video Local -> Drive..." -ForegroundColor Gray
+                Move-Item -LiteralPath $tmpVideo -Destination $videoPath -Force
                 $success++; Update-BlacklistEntry -id $id -marker "[RE-SUB-VIDEO]" -NoFlush $true 
                 if ($id -notin $toUpload) { $toUpload.Add($id) }
             } else { 
@@ -980,6 +998,8 @@ function Run-ReSubtitling {
                 Write-Host "  [!] ECHEC : La video n'a pas pu être générée pour $id" -ForegroundColor Yellow
             }
 
+            # Nettoyage local de l'ID courant
+            Get-ChildItem -LiteralPath $localWork -Filter "$id*" | Remove-Item -Force -ErrorAction SilentlyContinue
             if ($batchIdx % 10 -eq 0) { Flush-BlacklistUpdates }
         } catch {
             Write-Host "  [!!!] ERREUR FATALE ID $id : $($_.Exception.Message)" -ForegroundColor Red
@@ -1157,7 +1177,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "`n  ============================================================" -ForegroundColor Magenta
-    Write-Host "             INDUSTRIAL PIPELINE v12.8 UNIFIED" -ForegroundColor White
+    Write-Host "             INDUSTRIAL PIPELINE v12.9 UNIFIED" -ForegroundColor White
     Write-Host "  ============================================================`n" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
