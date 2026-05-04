@@ -847,9 +847,10 @@ function Run-ReSubtitling {
     Write-Host "   WORKFLOW RE-SUBTITLING (1FPS STATIC VIDEOS)" -ForegroundColor Cyan
     Write-Host "=================================================" -ForegroundColor Cyan
     
+    Write-Host "  Chargement de la blacklist... (Patientez)" -ForegroundColor Gray
     $blContent = Get-Content -LiteralPath $BlacklistPath
     
-    Write-Host "  Quelles vidéos re-sous-titrer ?" -ForegroundColor White
+    Write-Host "`n  Quelles vidéos re-sous-titrer ?" -ForegroundColor White
     Write-Host "  1. [SUB-MISSING] uniquement (Absence de ST)"
     Write-Host "  2. [SUB-KO] uniquement (Mauvaise langue)"
     Write-Host "  3. [TO-REVIEW] uniquement (Vidéos à valeur ajoutée)"
@@ -866,6 +867,7 @@ function Run-ReSubtitling {
         default { return }
     }
 
+    Write-Host "  Analyse des entrées... (Patientez)" -ForegroundColor Gray
     if ($filter -eq "MANUAL") {
         $manualId = Read-Host "  Saisir l'ID YouTube"
         if ($manualId -match "^[a-zA-Z0-9_-]{11}$") { $idsToProcess = @($manualId) } else { return }
