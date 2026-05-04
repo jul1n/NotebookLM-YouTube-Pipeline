@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.1
+# Industrial YouTube Transcription Pipeline v12.2
 # Unified Industrial Suite for NotebookLM
-# v12.1: Overhauled Master Inventory with Title, Date, and granular status mapping.
+# v12.2: Native .NET I/O (WriteAllLines) and pipeline-free loop to kill buffer errors.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -144,7 +144,7 @@ function Flush-BlacklistUpdates {
             }
             if (!$found) { $newContent.Add("$($update.ID) # $($update.Metadata) $($update.Marker)".Trim()) }
         }
-        $newContent | Out-File $path -Encoding utf8 -ErrorAction Stop
+        [System.IO.File]::WriteAllLines($path, $newContent)
         $global:pendingBlacklistUpdates.Clear()
     } catch { }
 }
@@ -897,7 +897,9 @@ function Run-ReSubtitling {
     $limit = Read-Host "  Limite"
     if ($limit -as [int]) { 
         $limitVal = [int]$limit
-        $idsToProcess = $idsToProcess | Select-Object -First $limitVal
+        if ($limitVal -lt $idsToProcess.Count) {
+            $idsToProcess = $idsToProcess.GetRange(0, $limitVal)
+        }
     }
     $success = 0; $failed = 0; $idx = 0
     
@@ -1079,7 +1081,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v12.1 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v12.2 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
