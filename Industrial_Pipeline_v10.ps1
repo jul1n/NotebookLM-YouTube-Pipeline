@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.9.2
+# Industrial YouTube Transcription Pipeline v11.0
 # Unified Industrial Suite for NotebookLM
-# v10.9.2: Fixed syntax in Run-ReSubtitling and added existing video skip logic.
+# v11.0: Radical VTT cleaning (line-based removal) and total alignment with integrity check.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -424,12 +424,13 @@ function Process-LocalFiles {
                 $txt = $txt -replace '(?s)<.*?>', '' # Tags HTML/VTT
                 $txt = $txt -replace 'WEBVTT|Kind: captions|Language: \S+', '' # Headers
                 
-                # Suppression globale des timestamps et des infos de positionnement
-                # On couvre plusieurs formats (avec ou sans heures, virgule ou point, millisecondes facultatives)
-                $tsRegex = '\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?'
-                $txt = $txt -replace $tsRegex, ' '
+                # Nettoyage radical des timestamps (on supprime toute ligne contenant '-->')
+                $lines = $txt -split "\r?\n"
+                $txt = ($lines | Where-Object { $_ -notmatch '-->' }) -join "`n"
+                
+                # Suppression des balises residuelles et entites HTML
                 $txt = $txt -replace 'align:\S+|position:\S+|line:\S+|size:\S+|region:\S+|<.*?>', ' '
-                $txt = $txt -replace '&\w+;', ' ' # Entites HTML comme &nbsp;
+                $txt = $txt -replace '&\w+;', ' '
 
                 
                 # Nettoyage des indices numeriques seuls (souvent presents dans SRT/VTT)
@@ -1003,7 +1004,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║            Industrial Pipeline v10.9.2 Unified            ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v11.0 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
