@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v11.2
+# Industrial YouTube Transcription Pipeline v12.0
 # Unified Industrial Suite for NotebookLM
-# v11.2: Periodic blacklist save and enhanced resume security (MP4 existence check).
+# v12.0: Local buffering for blacklist (fixes Drive-related memory/parser errors).
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -50,6 +50,8 @@ foreach ($p in @($BinDir, $AllPacksDir, $LogsDir, $ReSubDir, $AudioDir, $ThumbDi
 
 $threadLimit = 16
 $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+$ErrorActionPreference = "Stop"
+$global:CurrentBlacklistPath = $BlacklistPath
 $global:pendingBlacklistUpdates = [System.Collections.Generic.List[PSObject]]::new()
 $blacklistCandidates = [System.Collections.Generic.List[PSObject]]::new()
 
@@ -123,7 +125,8 @@ function Update-BlacklistEntry($id, $marker, $metadata = "", $NoFlush = $false) 
 function Flush-BlacklistUpdates {
     if ($global:pendingBlacklistUpdates.Count -eq 0) { return }
     try {
-        $content = Get-Content -LiteralPath $BlacklistPath -ErrorAction Stop
+        $path = $global:CurrentBlacklistPath
+        $content = Get-SafeContent $path
         $newContent = [System.Collections.Generic.List[string]]::new($content)
         foreach ($update in $global:pendingBlacklistUpdates) {
             $found = $false
@@ -141,7 +144,7 @@ function Flush-BlacklistUpdates {
             }
             if (!$found) { $newContent.Add("$($update.ID) # $($update.Metadata) $($update.Marker)".Trim()) }
         }
-        $newContent | Out-File $BlacklistPath -Encoding utf8 -ErrorAction Stop
+        $newContent | Out-File $path -Encoding utf8 -ErrorAction Stop
         $global:pendingBlacklistUpdates.Clear()
     } catch { }
 }
@@ -847,8 +850,13 @@ function Run-ReSubtitling {
     Write-Host "   WORKFLOW RE-SUBTITLING (1FPS STATIC VIDEOS)" -ForegroundColor Cyan
     Write-Host "=================================================" -ForegroundColor Cyan
     
+    Write-Host "  Utilisation d'un buffer local pour la blacklist..." -ForegroundColor Gray
+    $localBuffer = Join-Path $env:TEMP "blacklist_industrial.tmp"
+    Copy-Item -LiteralPath $BlacklistPath -Destination $localBuffer -Force
+    $global:CurrentBlacklistPath = $localBuffer
+
     Write-Host "  Chargement de la blacklist... (Patientez)" -ForegroundColor Gray
-    $blContent = Get-Content -LiteralPath $BlacklistPath
+    $blContent = [System.IO.File]::ReadAllLines($localBuffer)
     
     Write-Host "`n  Quelles vidéos re-sous-titrer ?" -ForegroundColor White
     Write-Host "  1. [SUB-MISSING] uniquement (Absence de ST)"
@@ -937,8 +945,11 @@ function Run-ReSubtitling {
         if ($batchIdx % 10 -eq 0) { Flush-BlacklistUpdates }
     }
     
-    # On vide le buffer final
+    # On vide le buffer final et on synchronise vers le Drive
     Flush-BlacklistUpdates
+    Copy-Item -LiteralPath $localBuffer -Destination $BlacklistPath -Force
+    $global:CurrentBlacklistPath = $BlacklistPath
+    Write-Host "`n  [OK] Blacklist synchronisée sur le Drive." -ForegroundColor Green
 }
 
 # ==============================================================================
@@ -1030,7 +1041,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v11.2 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v12.0 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
