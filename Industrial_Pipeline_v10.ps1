@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v10.5
+# Industrial YouTube Transcription Pipeline v10.6
 # Unified Industrial Suite for NotebookLM
-# v10.5: Global maintenance headers, standardized UI width & advanced pack synthesis.
+# v10.6: Advanced Blacklist sorting & SUB-MISSING tag support for re-subtitling.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -822,7 +822,7 @@ function Run-ReSubtitling {
     Write-Host "=================================================" -ForegroundColor Cyan
     
     $blContent = Get-Content -LiteralPath $BlacklistPath
-    $idsToProcess = $blContent | Where-Object { $_ -match "Aucun sous-titre|no subtitles|\[FORCE RE-SUB" -and $_ -notmatch "\[RE-SUB-VIDEO\]|\[INACCESSIBLE" } | ForEach-Object { ($_ -split " #")[0].Trim() }
+    $idsToProcess = $blContent | Where-Object { $_ -match "Aucun sous-titre|no subtitles|\[SUB-MISSING\]|\[FORCE RE-SUB" -and $_ -notmatch "\[RE-SUB-VIDEO\]|\[INACCESSIBLE" } | ForEach-Object { ($_ -split " #")[0].Trim() }
     
     if ($idsToProcess.Count -eq 0) { Write-Log "Aucune video a re-sous-titrer." "Green"; return }
     
@@ -949,7 +949,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v10.5 Unified             ║" -ForegroundColor White
+    Write-Host "  ║             Industrial Pipeline v10.6 Unified             ║" -ForegroundColor White
     Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
