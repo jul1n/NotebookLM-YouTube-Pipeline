@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v13.2
+# Industrial YouTube Transcription Pipeline v13.2.1
 # Unified Industrial Suite for NotebookLM
-# v13.2: Targeted Maintenance mode (run diagnostics on a specific channel).
+# v13.2.1: Streamlined re-subtitling UI with cleaner status lines.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -940,26 +940,23 @@ function Run-ReSubtitling {
 
     for ($i=0; $i -lt $finalIds.Count; $i++) {
         $id = $finalIds[$i]; $idx = $i + 1; $batchIdx = $idx
-        $stats = "[$idx/$($finalIds.Count)] [OK: $success | KO: $failed]"
-        Write-Host "`n  [TRACE] Debut loop ($idx/$($finalIds.Count)) pour ID: $id" -ForegroundColor Gray
+        $prefix = "  [$idx/$($finalIds.Count)]"
         
         try {
             $audioPath = Join-Path $AudioDir "$id.m4a"
             $videoPath = Join-Path $OutputDir "$id.mp4"
-            
-            # Chemins locaux temporaires
             $tmpAudio = Join-Path $localWork "$id.m4a"
             $tmpVideo = Join-Path $localWork "$id.mp4"
             
             # Securite Reprise : Si le MP4 existe deja, on considere comme traite
             if (Test-Path -LiteralPath $videoPath) {
-                Write-Host "  $stats Skip (Déjà généré) : $id" -ForegroundColor Green
+                Write-Host "$prefix SKIP : $id (Déjà généré)" -ForegroundColor Green
                 $processedIds.Add($id)
                 if ($id -notin $toUpload) { $toUpload.Add($id) }
                 $success++; continue
             }
 
-            Write-Host "  $stats Traitement : $id" -ForegroundColor Cyan
+            Write-Host "$prefix PROCESS : $id" -ForegroundColor Cyan
         
             # 1. Recuperation Audio (Local)
             if (Test-Path -LiteralPath $audioPath) {
@@ -989,13 +986,13 @@ function Run-ReSubtitling {
                 if ($id -notin $toUpload) { $toUpload.Add($id) }
             } else { 
                 $failed++ 
-                Write-Host "  [!] ECHEC : La video n'a pas pu être générée pour $id" -ForegroundColor Yellow
+                Write-Host "      [!] ECHEC : La video n'a pas pu être générée pour $id" -ForegroundColor Yellow
             }
 
             Get-ChildItem -LiteralPath $localWork -Filter "$id*" | Remove-Item -Force -ErrorAction SilentlyContinue
             if ($batchIdx % 10 -eq 0) { Flush-BlacklistUpdates }
         } catch {
-            Write-Host "  [!!!] ERREUR FATALE ID $id : $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "      [!!!] ERREUR FATALE ID $id : $($_.Exception.Message)" -ForegroundColor Red
             $failed++
         }
     }
@@ -1188,7 +1185,7 @@ function Export-MasterInventory {
 while ($true) {
     Clear-Host
     Write-Host "`n  ============================================================" -ForegroundColor Magenta
-    Write-Host "             INDUSTRIAL PIPELINE v13.2 UNIFIED" -ForegroundColor White
+    Write-Host "             INDUSTRIAL PIPELINE v13.2.1 UNIFIED" -ForegroundColor White
     Write-Host "  ============================================================`n" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
