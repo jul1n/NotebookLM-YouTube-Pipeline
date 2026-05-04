@@ -1,6 +1,6 @@
-# Industrial YouTube Transcription Pipeline v12.5
+# Industrial YouTube Transcription Pipeline v12.6
 # Unified Industrial Suite for NotebookLM
-# v12.5: For-loop iteration for re-subtitling and enhanced loop tracing.
+# v12.6: Fixed header alignment and deep diagnostic traces for re-subtitling.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
@@ -882,8 +882,9 @@ function Run-ReSubtitling {
         "3" { "\[TO-REVIEW\]" }
         "4" { "Aucun sous-titre|no subtitles|\[SUB-MISSING\]|\[SUB-KO\]|\[TO-REVIEW\]|\[FORCE RE-SUB" }
         "5" { "MANUAL" }
-        default { return }
+        default { Write-Host "  [DEBUG] Choix invalide ($resubChoice). Retour."; return }
     }
+    Write-Host "  [DEBUG] Filtre selectionne : $filter" -ForegroundColor Gray
 
     Write-Host "  Analyse des entrées... (Patientez)" -ForegroundColor Gray
     $idsToProcess = [System.Collections.Generic.List[string]]::new()
@@ -899,6 +900,7 @@ function Run-ReSubtitling {
         }
     }
     
+    Write-Host "  [DEBUG] Nombre d'IDs detectes : $($idsToProcess.Count)" -ForegroundColor Gray
     if ($idsToProcess.Count -eq 0) { Write-Log "Aucune video correspondant aux criteres." "Green"; return }
 
     # Ajout d'une limite optionnelle pour eviter de saturer le systeme
@@ -907,15 +909,19 @@ function Run-ReSubtitling {
     $limit = Read-Host "  Limite"
     if ($limit -as [int]) { 
         $limitVal = [int]$limit
+        Write-Host "  [DEBUG] Application de la limite : $limitVal" -ForegroundColor Gray
         if ($limitVal -gt 0 -and $limitVal -lt $idsToProcess.Count) {
             $idsToProcess = $idsToProcess.GetRange(0, $limitVal)
         }
     }
 
     $finalIds = @($idsToProcess)
+    Write-Host "  [DEBUG] Liste finale : $($finalIds.Count) elements. Type: $($finalIds.GetType().Name)" -ForegroundColor Gray
     if ($finalIds.Count -eq 0) { Write-Log "Aucun ID final a traiter." "Yellow"; return }
 
     Write-Host "`n  [DEMARRAGE] Traitement de $($finalIds.Count) vidéos..." -ForegroundColor Cyan
+    Write-Host "  [DEBUG] AudioDir: $AudioDir (Exists: $(Test-Path $AudioDir))" -ForegroundColor Gray
+    Write-Host "  [DEBUG] OutputDir: $OutputDir (Exists: $(Test-Path $OutputDir))" -ForegroundColor Gray
     Write-Host "  Dossier Audio : $AudioDir" -ForegroundColor Gray
     Write-Host "  Dossier Vidéo : $OutputDir" -ForegroundColor Gray
     
@@ -1135,9 +1141,9 @@ function Export-MasterInventory {
 
 while ($true) {
     Clear-Host
-    Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "  ║             Industrial Pipeline v12.5 Unified             ║" -ForegroundColor White
-    Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Magenta
+    Write-Host "`n  ============================================================" -ForegroundColor Magenta
+    Write-Host "             INDUSTRIAL PIPELINE v12.6 UNIFIED" -ForegroundColor White
+    Write-Host "  ============================================================`n" -ForegroundColor Magenta
     Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
     Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
     Write-Host "  3. 🔁 Retenter uniquement les échecs (rapide)"
