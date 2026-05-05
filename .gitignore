@@ -16,6 +16,8 @@ cookie.txt
 _LOGS/
 _RE_SUBTITLING_WORK/
 _RE_SUBTITLING_WORK_TEST/
+_BACKUP_ANCIEN_SYSTEME/
+DATA_STORES/
 pipeline_operations.log
 scratch/
 backups/
