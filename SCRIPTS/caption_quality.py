@@ -11,6 +11,7 @@ import sys
 import time
 
 import pipeline_core as core
+import caption_reconstruction
 
 
 MARKERS = {
@@ -114,11 +115,12 @@ def audit_quality(runtime,channel=None,sample_limit=6):
                 source=review_source(inventory,ident,languages)
                 before=db.execute('SELECT transcript FROM videos WHERE youtube_id=?',(ident,)).fetchone()[0]
                 mode='raw_captions' if source else 'text_markup_only'
+                reconstruction=None
                 if not source:
-                    # No guessed deduplication: remove only identifiable markup
-                    # in a review copy and preserve every spoken word/repetition.
+                    reconstruction=caption_reconstruction.reconstruct(before)
+                    if reconstruction['mode']=='rendered_triplets':mode='rendered_triplet_reconstruction'
                     source=dict(language='und',path='production transcript; raw VTT/SRT not found',
-                                original=before.encode('utf-8'),candidate=core.strip_caption_markup(before),extension='txt')
+                                original=before.encode('utf-8'),candidate=reconstruction['text'],extension='txt')
                 sample_dir=target/ident;sample_dir.mkdir()
                 (sample_dir/'before.txt').write_text(before,encoding='utf-8')
                 (sample_dir/'after.txt').write_text(source['candidate'],encoding='utf-8')
@@ -126,11 +128,16 @@ def audit_quality(runtime,channel=None,sample_limit=6):
                 archive.write_bytes(gzip.compress(source['original'],mtime=0))
                 if gzip.decompress(archive.read_bytes())!=source['original']:raise RuntimeError('Archive source invalide')
                 after_quality=inspect_text(source['candidate'])
+                if reconstruction and reconstruction['mode']=='rendered_triplets':
+                    snippets=[dict(operation=e['kind'],before=e['before'],after=e['after']) for e in reconstruction['edits']]
+                else:snippets=compare_snippets(before,source['candidate'])
                 preview=dict(youtube_id=ident,title=item['title'],channel=item['channel'],source_path=source['path'],
                              language=source['language'],source_sha256=hashlib.sha256(source['original']).hexdigest(),
                              cleaner_version=core.CAPTION_VERSION,reprocessing_mode=mode,before_quality=item['quality'],after_quality=after_quality,
                              before_characters=len(before),after_characters=len(source['candidate']),
-                             snippets=compare_snippets(before,source['candidate']),production_modified=False)
+                             reconstruction={k:v for k,v in reconstruction.items() if k!='text'} if reconstruction else None,
+                             snippet_scope='same_source_block' if mode=='rendered_triplet_reconstruction' else 'sequence_alignment_indicative',
+                             snippets=snippets,opening_after=source['candidate'][:1800],production_modified=False)
                 core.atomic_json(sample_dir/'comparison.json',preview)
                 previews.append(preview)
     report=dict(generated_at=core.now(),texts_scanned=total,status_counts=dict(counts),marker_text_counts=dict(marker_counts),
@@ -144,8 +151,14 @@ def audit_quality(runtime,channel=None,sample_limit=6):
     markdown+='\nLes répétitions peuvent être réellement prononcées. Elles ne sont jamais supprimées globalement.\n'
     for item in previews:
         ident=item['youtube_id'];markdown+=f"\n## {item['channel']} — {item['title']}\n\nVidéo : https://www.youtube.com/watch?v={ident}\n\n[Texte actuel]({ident}/before.txt) · [Copie retraitée]({ident}/after.txt) · [Comparaison détaillée]({ident}/comparison.json)\n\n"
-        mode='Retraitement depuis une source horodatée locale.' if item['reprocessing_mode']=='raw_captions' else 'Source VTT/SRT non retrouvée : copie nettoyée des seules balises, sans suppression de répétitions.'
+        mode=('Retraitement depuis une source horodatée locale.' if item['reprocessing_mode']=='raw_captions' else
+              'Reconstruction des trois affichages d’un même bloc. Chaque copie retirée est identique au bloc conservé. Les groupes sans horodatage sont signalés séparément et restent à valider.' if item['reprocessing_mode']=='rendered_triplet_reconstruction' else
+              'Motif de copies non confirmé : seules les balises sont nettoyées, sans suppression de répétitions.')
         markdown+=f"{mode}\n\nMarqueurs techniques avant/après : {sum(item['before_quality']['technical_markers'].values())} / {sum(item['after_quality']['technical_markers'].values())}. Répétitions suspectes avant/après : {item['before_quality']['suspected_repetitions']} / {item['after_quality']['suspected_repetitions']}.\n"
+        if item['reconstruction'] and item['reconstruction']['mode']=='rendered_triplets':
+            evidence=item['reconstruction']['evidence']
+            markdown+=f"\nGroupes horodatés confirmés : {evidence['anchored_groups']}. Groupes sans horodatage inférés du format : {evidence['inferred_untimed_groups']}. Lignes-copies retirées : {item['reconstruction']['removed_copy_lines']}. Tous les blocs source sont comptabilisés.\n\n### Début du texte reconstruit\n\n{item['opening_after']}\n\n### Comparaison du même bloc source\n"
+        else:markdown+='\nLes extraits suivants utilisent un alignement indicatif ; consulter les fichiers entiers en cas de décalage.\n'
         for difference in item['snippets'][:2]:
             markdown+=f"\nAvant :\n\n```text\n{difference['before']}\n```\n\nAprès :\n\n```text\n{difference['after']}\n```\n"
     markdown+='\n## Conservation avant nettoyage\n\nUne source horodatée compressée, son empreinte, la provenance et un texte validé suffisent à refaire le traitement hors ligne. Les anciens TXT et packs sont des dérivés régénérables. Si la source manque ou si la qualité reste douteuse, conserver les fichiers existants. Aucun ancien fichier n’est supprimé par ce contrôle.\n'

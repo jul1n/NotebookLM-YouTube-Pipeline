@@ -85,5 +85,23 @@ class QualityTest(unittest.TestCase):
         text=' '.join(f'word{i}' for i in range(10000))
         self.assertEqual(quality.inspect_text(text)['suspected_repetitions'],0)
 
+    def test_report_reconstruction_uses_matching_source_blocks(self):
+        from test_caption_reconstruction import rendered
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'DATABASE').mkdir()
+            before=rendered('most<00:00:00.280><c> people think you need to spend</c>',
+                            'thousands<00:00:01.640><c> of dollars</c>')
+            with core.closing_database(sqlite3.connect(root/'DATABASE'/'PIPELINE_V15.db')) as db:
+                db.executescript('CREATE TABLE channels(id INTEGER PRIMARY KEY,prefix TEXT,lang_config TEXT); CREATE TABLE videos(youtube_id TEXT,title TEXT,transcript TEXT,status TEXT,channel_id INTEGER,id INTEGER PRIMARY KEY); INSERT INTO channels VALUES(1,"Test","en");')
+                db.execute('INSERT INTO videos VALUES(?,?,?,?,?,?)',('abcdefghijk','Example',before,'SUCCESS',1,1))
+            report,target=quality.audit_quality(core.Runtime(root),sample_limit=1)
+            item=report['previews'][0]
+            self.assertEqual(item['reprocessing_mode'],'rendered_triplet_reconstruction')
+            self.assertEqual(item['snippet_scope'],'same_source_block')
+            self.assertEqual(item['snippets'][0]['after'],'most people think you need to spend')
+            self.assertEqual((target/'abcdefghijk'/'after.txt').read_text(),'most people think you need to spend thousands of dollars')
+            with core.closing_database(core.connect(root/'DATABASE'/'PIPELINE_V15.db',True)) as db:
+                self.assertEqual(db.execute('SELECT transcript FROM videos').fetchone()[0],before)
+
 
 if __name__=='__main__':unittest.main()
