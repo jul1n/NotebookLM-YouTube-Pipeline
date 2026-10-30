@@ -183,13 +183,14 @@ class NightJob:
         return dict(verified_snapshots=len(list((self.runtime.database_dir/'snapshots').glob('*.verified.json'))))
 
     def dashboard(self):
-        for name in ('Audit-DataHealth.ps1','Sync-Dashboard-v15.ps1'):
-            result=subprocess.run(['pwsh','-NoProfile','-File',str(self.runtime.root/'SCRIPTS'/name)],capture_output=True,timeout=600)
-            if result.returncode:raise RuntimeError(f'Dashboard update failed: {name}')
-        return dict(refreshed=True)
+        from dashboard_export import export_dashboard
+        return export_dashboard(self.runtime)
 
     def run(self):
         if self.state['status']=='done':return
+        if self.state.get('error'):
+            self.state.setdefault('recovered_errors',[]).append(dict(error=self.state.pop('error'),
+                stage=self.state.get('current_stage'),failed_at=self.state.pop('failed_at',None),resumed_at=core.now()))
         self.state.update(status='running',pid=os.getpid(),started_at=core.now());self.save()
         try:
             with core.acquisition_lock(self.runtime):

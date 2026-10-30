@@ -80,5 +80,15 @@ class NightTest(unittest.TestCase):
         result=night.integrity(self.runtime)
         self.assertEqual(result['sqlite'],'ok');self.assertEqual(result['videos'],1)
 
+    def test_resume_preserves_completed_steps_and_records_recovered_error(self):
+        job=self.job();job.state.update(error='Old local failure',failed_at=core.now(),current_stage='dashboard')
+        job.state['stages']['apply']={'status':'done','result':{'changed':1}}
+        with patch.object(job,'backup',return_value={}),patch('night_runner.integrity',return_value={}),patch.object(job,'quality_audit',return_value={}),patch.object(job,'updates',return_value={}),patch.object(job,'build_packs',return_value={}),patch.object(job,'dashboard',return_value={}),patch('night_runner.apply_repairs',side_effect=AssertionError('replayed')):
+            job.run()
+        self.assertEqual(job.state['status'],'done')
+        self.assertNotIn('error',job.state)
+        self.assertEqual(job.state['recovered_errors'][0]['error'],'Old local failure')
+        self.assertEqual(job.state['stages']['apply']['result']['changed'],1)
+
 
 if __name__=='__main__':unittest.main()
