@@ -1,28 +1,39 @@
-# Industrial YouTube Transcription Pipeline v13.5.8
-# Unified Industrial Suite for NotebookLM
-# v13.5.8: Ultra-aggressive VTT cleaning for embedded timestamps and position tags.
+# Industrial YouTube Transcription Pipeline v14.0.0 (SQLITE)
+param(
+    [string]$ChannelName = $null,
+    [string]$Action = $null,
+    [switch]$AutoLoop = $false,
+    [string]$ReverseAll = "n"
+)
+Write-Host "  [DEBUG] Parametre ChannelName recu : [$ChannelName]" -ForegroundColor Yellow
+# Hardened for Google Drive stability and scalability with SQLite DB storage.
+# v14.0.0: Architecture "DB-First" to reduce file count and I/O latency.
 
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 $ErrorActionPreference = "Stop"
+$OutputEncoding = [System.Text.Encoding]::UTF8
+if ($null -ne [Console]::OutputEncoding) { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 }
+if ($null -ne [Console]::InputEncoding) { [Console]::InputEncoding = [System.Text.Encoding]::UTF8 }
 
 # ==============================================================================
 # CONFIGURATION GLOBALE
 # ==============================================================================
 $BaseDir = $PSScriptRoot
 $BinDir = Join-Path $BaseDir "BIN"
-$YtDlp = Join-Path $BinDir "yt-dlp.exe"
-$Ffmpeg = Join-Path $BinDir "ffmpeg.exe"
-$ConfigPath = Join-Path $BaseDir "channels_config.csv"
-$BlacklistPath = Join-Path $BaseDir "blacklist.txt"
-$AllPacksDir = Join-Path $BaseDir "ALL_PACKS"
-$LogsDir = Join-Path $BaseDir "_LOGS"
-$ReSubDir = Join-Path $BaseDir "_RE_SUBTITLING_WORK"
+$global:YtDlp = Join-Path $BinDir "yt-dlp.exe"
+$global:Ffmpeg = Join-Path $BinDir "ffmpeg.exe"
+$global:Sqlite = Join-Path $BinDir "sqlite3.exe"
+$global:ConfigPath = Join-Path $BaseDir "channels_config.csv"
+$global:BlacklistPath = Join-Path $BaseDir "blacklist.txt"
+$global:AllPacksDir = Join-Path $BaseDir "ALL_PACKS"
+$global:DbDir = Join-Path $BaseDir "DATA_STORES"
+$global:LogsDir = Join-Path $BaseDir "_LOGS"
+$global:ReSubDir = Join-Path $BaseDir "_RE_SUBTITLING_WORK"
 
 # Directories for Re-Subtitling
 $AudioDir = Join-Path $ReSubDir "1_AUDIO"
 $ThumbDir = Join-Path $ReSubDir "2_THUMBS"
 $OutputDir = Join-Path $ReSubDir "3_STATIC_VIDEOS"
-$ReSubDir = Join-Path $BaseDir "_RE_SUBTITLING_WORK"
 $SettingsPath = Join-Path $BaseDir "settings.json"
 
 # Default Settings
@@ -30,6 +41,7 @@ $global:Settings = @{
     CookieSource = "firefox"
     MaxPlaylistEnd = 2000
     AutoClean = $true
+    UseDatabase = $true
 }
 
 if (Test-Path $SettingsPath) {
@@ -39,12 +51,15 @@ if (Test-Path $SettingsPath) {
     } catch { }
 }
 
+$global:useCookies = @()
+$global:userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+
 function Save-Settings {
     $global:Settings | ConvertTo-Json | Out-File $SettingsPath -Encoding utf8
 }
 
 # Ensure core directories exist
-foreach ($p in @($BinDir, $AllPacksDir, $LogsDir, $ReSubDir, $AudioDir, $ThumbDir, $OutputDir)) {
+foreach ($p in @($BinDir, $global:AllPacksDir, $LogsDir, $ReSubDir, $AudioDir, $ThumbDir, $OutputDir, $global:DbDir)) {
     if (!(Test-Path -LiteralPath $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
 }
 
@@ -55,21 +70,53 @@ $global:CurrentBlacklistPath = $BlacklistPath
 $global:pendingBlacklistUpdates = [System.Collections.Generic.List[PSObject]]::new()
 $blacklistCandidates = [System.Collections.Generic.List[PSObject]]::new()
 
+# --- HELPER: SQLite Engine ---
+function Invoke-Sqlite {
+    param (
+        [Parameter(Mandatory=$true)] [string]$DbPath,
+        [Parameter(Mandatory=$true)] [string]$Query,
+        [switch]$Silent
+    )
+    if (!(Test-Path $Sqlite)) {
+        throw "Erreur : BIN\sqlite3.exe introuvable. Veuillez l'installer."
+    }
+    
+    # Envoi de la requête via stdin (plus robuste pour les gros textes)
+    $exe = if ($global:Sqlite) { $global:Sqlite } else { $Sqlite }
+    if (!(Test-Path $exe)) { throw "SQLite executable introuvable: $exe" }
+    
+    if (!$Silent) { Write-Host "    [SQL] Executing on $DbPath" -ForegroundColor Gray }
+    $result = $Query | & $exe $DbPath 2>&1
+    if ($result -match "Error:") { throw "SQLite Error: $result" }
+    return $result
+}
+
+function Ensure-ChannelDb {
+    param ([string]$ChannelName)
+    $DbPath = Join-Path $global:DbDir "$($ChannelName).db"
+    if (!(Test-Path $DbPath)) {
+        Write-Host "  [DB] Creation de la base pour $ChannelName..." -ForegroundColor Cyan
+        $schema = "CREATE TABLE IF NOT EXISTS videos (youtube_id TEXT PRIMARY KEY, title TEXT, upload_date TEXT, duration INTEGER, view_count INTEGER, channel TEXT, description TEXT, transcript TEXT, status TEXT, last_updated DATETIME DEFAULT CURRENT_TIMESTAMP);"
+        Invoke-Sqlite -DbPath $DbPath -Query $schema
+    }
+    return $DbPath
+}
+
 function Write-StepHeader {
-    param ($Title, $StepNum = $null, $TotalSteps = $null, $Emoji = "📦")
-    $line = "══════════════════════════════════════════════════════════"
+    param ($Title, $StepNum = $null, $TotalSteps = $null, $Emoji = "[*]")
+    $line = "a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??"
     $fullTitle = if ($StepNum) { "[ETAPE $StepNum/$TotalSteps] $Title" } else { $Title }
     $rawTitle = "$Emoji $fullTitle"
     $padSize = 56 - $rawTitle.Length
     if ($padSize -lt 0) { $padSize = 0 }
     $padding = " " * $padSize
-    Write-Host "`n  ╔$line╗" -ForegroundColor Cyan
-    Write-Host "  ║ $rawTitle$padding ║" -ForegroundColor White
-    Write-Host "  ╚$line╝" -ForegroundColor Cyan
+    Write-Host "`n  a??$linea??" -ForegroundColor Cyan
+    Write-Host "  a?? $rawTitle$padding a??" -ForegroundColor White
+    Write-Host "  a??$linea??" -ForegroundColor Cyan
 }
 
 function Write-SubStep {
-    param ($Title, $StepNum, $TotalSteps, $Emoji = "🔹", $Status = "")
+    param ($Title, $StepNum, $TotalSteps, $Emoji = "[+]", $Status = "")
     $prefix = "  [$StepNum/$TotalSteps] $Emoji $Title"
     Write-Host $prefix.PadRight(40) -NoNewline -ForegroundColor Gray
     if ($Status) { Write-Host " : $Status" -ForegroundColor White }
@@ -83,33 +130,80 @@ function Get-DurationStr {
     return "$($elapsed.Minutes)m $($elapsed.Seconds)s"
 }
 
+# ==============================================================================
+# ENCODAGE ET AFFICHAGE
+# ==============================================================================
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$PSDefaultParameterValues['*:Encoding'] = 'utf8'
+
+function Write-Header {
+    param($Title)
+    $w = 80
+    $line = "=" * $w
+    Write-Host "`n$line" -ForegroundColor Cyan
+    Write-Host "  $Title" -ForegroundColor White -Bold
+    Write-Host "$line" -ForegroundColor Cyan
+}
+
+function Invoke-Sqlite {
+    param($DbPath, $Query)
+    # Nettoyage radical des guillemets
+    $cleanPath = $DbPath.Replace('"', '')
+    $tmpSql = [System.IO.Path]::GetTempFileName()
+    $Query | Out-File $tmpSql -Encoding utf8
+    $res = & $Sqlite -header -json "$cleanPath" ".read $tmpSql" | Out-String
+    Remove-Item $tmpSql -ErrorAction SilentlyContinue
+    if ($res -and $res.Trim()) { return $res | ConvertFrom-Json }
+    return @()
+}
+
 function Write-Log {
     param ($msg, $color = "White", $prefix = "SYSTEM")
     $timestamp = Get-Date -Format "HH:mm:ss"
     $logMsg = "[$timestamp] [$prefix] $msg"
-    $logFile = Join-Path $LogsDir "pipeline.log"
-    
-    $success = $false; $attempts = 0
-    while (-not $success -and $attempts -lt 5) {
-        try {
-            $attempts++
-            $logMsg | Add-Content -LiteralPath $logFile -ErrorAction Stop
-            $success = $true
-        } catch { Start-Sleep -Milliseconds 200 }
-    }
+    try {
+        $logFile = Join-Path $global:LogsDir "pipeline.log"
+        $logMsg | Add-Content -LiteralPath $logFile -ErrorAction SilentlyContinue
+    } catch { }
 
     if ($msg -notmatch $noisePattern) {
         $shortMsg = $msg -replace "^\[.*?\]\s*", ""
         if ($shortMsg.Trim() -ne "") {
-            if ($prefix -eq "SYSTEM" -or $prefix -eq "DIAG" -or $prefix -eq "LOCK") {
-                Write-Host "[$timestamp] " -NoNewline -ForegroundColor DarkGray
-                Write-Host "[$prefix] " -NoNewline -ForegroundColor Gray
-                Write-Host $shortMsg -ForegroundColor $color
-            } else {
-                Write-Host "    $shortMsg" -ForegroundColor $color
-            }
+            $pCol = switch($prefix) { "SYSTEM" {"Cyan"} "DIAG" {"Yellow"} "LOCK" {"Red"} default {"Gray"} }
+            Write-Host "[$timestamp] " -NoNewline -ForegroundColor DarkGray
+            Write-Host "[$prefix] " -NoNewline -ForegroundColor $pCol
+            Write-Host $shortMsg -ForegroundColor $color
         }
     }
+}
+
+
+function Get-CleanTranscript {
+    param($content)
+    if (!$content) { return "" }
+    # 1. Suppression des tags HTML et artifacts VTT (align/position/region)
+    $txt = $content -replace '(?s)<.*?>', '' -replace '(?m)^WEBVTT\s*$', '' -replace '(?m)^Kind:.*$', '' -replace '(?m)^Language:.*$', ''
+    $txt = $txt -replace '(align|position|size|line|vertical|region|style):\S+', ' '
+    
+    # 2. Suppression des timestamps (Complexes: 20181004|00:00:00, Classiques: 00:00:00.000)
+    $txt = $txt -replace '\d{8}\|\d{1,2}:\d{2}:\d{2}[\.,]\d{3}', ' '
+    $txt = $txt -replace '\d{1,2}:\d{2}:\d{2}[\.,]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[\.,]\d{3}', ' '
+    $txt = $txt -replace '\b\d{1,2}:\d{2}\b', ' ' # Timestamps simples mm:ss
+    
+    # 3. Nettoyage final (artifacts numeriques et espaces)
+    $txt = $txt -replace '(?m)^\d+\s*$', '' -replace '&\w+;', ' ' -replace '\s+', ' '
+    
+    # 4. Normalisation Unicode (Apostrophes et Guillemets)
+    $txt = $txt -replace '[\u2018\u2019\u201A\u201B]', "'"
+    $txt = $txt -replace '[\u201C\u201D\u201E\u201F]', '"'
+    # Reparation des '?' mal places (ex: don?t, it?s, D?Agostino)
+    $txt = $txt -replace '([a-zA-Z])\?([a-zA-Z])', '$1''$2'
+    
+    # 5. Suppression des doublons consecutifs (Stuttering des auto-subs)
+    $words = $txt -split "\s+" | Where-Object { $_ -ne "" }
+    $uniqueWords = [System.Collections.Generic.List[string]]::new(); $lastW = ""
+    foreach ($w in $words) { if ($w -ne $lastW) { $uniqueWords.Add($w); $lastW = $w } }
+    return $uniqueWords -join " "
 }
 
 function Get-SafeContent {
@@ -118,15 +212,16 @@ function Get-SafeContent {
     $maxRetries = 5; $retryCount = 0
     while ($retryCount -lt $maxRetries) {
         try {
-            if ($Raw) { return [System.IO.File]::ReadAllText($Path) }
-            return [System.IO.File]::ReadAllLines($Path)
+            $encoding = [System.Text.Encoding]::UTF8
+            if ($Raw) { return [System.IO.File]::ReadAllText($Path, $encoding) }
+            return [System.IO.File]::ReadAllLines($Path, $encoding)
         } catch {
             $retryCount++
             $err = $_.Exception.Message
             if ($retryCount -lt $maxRetries) { 
                 # On log seulement si c'est une erreur de type "Drive busy" ou "Semaphore"
-                if ($err -match "temporisation|semaphore|occupé|busy|locked") {
-                    Write-Host "  [RETRY $retryCount/$maxRetries] Accès disque différé : $err" -ForegroundColor Yellow
+                if ($err -match "temporisation|semaphore|occupe|busy|locked") {
+                    Write-Host "  [RETRY $retryCount/$maxRetries] Acca?s disque differe : $err" -ForegroundColor Yellow
                 }
                 Start-Sleep -Milliseconds (500 * $retryCount) 
             }
@@ -207,10 +302,13 @@ filter Count-Progress { $global:itemCount++; $_ }
 # ==============================================================================
 
 function Sync-YouTube {
-    param ($Url, $RawDir, $YtDlp, $Ffmpeg, $Cookies, $Lang, $BaseDir, $LogPrefix, $BlacklistPath, $RetryOnly)
+    param ($Url, $LogPrefix, $Lang, $RetryOnly, $Reverse = $false)
     
-    $masterListPath = Join-Path $BaseDir "youtube_master_list.txt"
-    $missingListPath = Join-Path $BaseDir "missing_videos.txt"
+    $cDir = Join-Path $global:BaseDir $LogPrefix
+    $RawDir = Join-Path $cDir "1_RAW"
+    
+    $masterListPath = Join-Path $cDir "youtube_master_list.txt"
+    $missingListPath = Join-Path $cDir "missing_videos.txt"
     
     # Gestion des Cookies persistee via Settings
     $useCookies = @()
@@ -255,8 +353,9 @@ function Sync-YouTube {
         $masterIds = [System.Collections.Generic.List[string]]::new()
         $scanCount = 0
         
+        $reverseArg = if ($Reverse) { "--playlist-reverse" } else { "" }
         # Extraction en flux pour afficher la progression
-        & $YtDlp --flat-playlist --playlist-end $($global:Settings.MaxPlaylistEnd) --print "%(title)s|%(id)s" --quiet --no-warnings $Url | ForEach-Object {
+        & $global:YtDlp --flat-playlist --playlist-end $($global:Settings.MaxPlaylistEnd) $reverseArg --print "%(title)s|%(id)s" --quiet --no-warnings $Url | ForEach-Object {
             $scanCount++
             if ($scanCount % 20 -eq 0) {
                 Write-Host "`r  [SYNC] Scan en cours : $scanCount videos... " -NoNewline -ForegroundColor Gray
@@ -281,39 +380,60 @@ function Sync-YouTube {
     $originalMasterCount = $originalMasterIds.Count
     $masterIds = $masterIds | Where-Object { $_ -notin $blacklist }
     $ignoredByBlacklist = $originalMasterCount - $masterIds.Count
-    if ($ignoredByBlacklist -gt 0) { Write-Log "$ignoredByBlacklist video(s) ignoree(s) (Blacklist)." "Gray" $LogPrefix }
+    if ($ignoredByBlacklist -gt 0) {
+        $i = 0; while ($i -lt 5) { try { "[$LogPrefix] $(Get-Date -Format 'HH:mm:ss') $ignoredByBlacklist video(s) ignoree(s) (Blacklist)." | Add-Content (Join-Path $global:LogsDir "pipeline.log") -ErrorAction Stop; break } catch { $i++; Start-Sleep -Milliseconds 100 } }
+    }
 
     $localIds = [System.Collections.Generic.HashSet[string]]::new()
-    "[$LogPrefix] Scan des fichiers locaux (Methode Ultra-Robuste)..." | Add-Content (Join-Path $LogsDir "pipeline.log")
     
-    Write-Host "  [PATIENCE] Lecture du dossier local (Plusieurs milliers de fichiers)..." -ForegroundColor Gray
+    # --- PHASE 1 : Consultation de la Base de Donnees (Ultra-Rapide) ---
+    if ($global:Settings.UseDatabase) {
+        $dbPath = Ensure-ChannelDb -ChannelName $LogPrefix
+        $dbIds = Invoke-Sqlite -DbPath $dbPath -Query "SELECT youtube_id FROM videos;"
+        if ($dbIds) {
+            foreach ($row in $dbIds) {
+                $id = $row.youtube_id.Trim()
+                if ($id -match "^[a-zA-Z0-9_-]{11}$") { [void]$localIds.Add($id) }
+            }
+        }
+        Write-Host "  [DB] $($localIds.Count) videos trouvees en base de donnees." -ForegroundColor Gray
+    }
+
+# --- HELPER: Reading Files with UTF8 and Retry ---
+function Get-SafeContent {
+    param($p)
+    $i = 0
+    while ($i -lt 3) {
+        try {
+            return [System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)
+        } catch {
+            $i++
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    return ""
+}
+
+    # --- PHASE 2 : Scan du dossier local (pour les nouveaux fichiers non encore en base) ---
+    Write-Host "  [SCAN] Recherche de nouveaux fichiers dans 1_RAW..." -ForegroundColor Gray
     $allFiles = [System.IO.Directory]::GetFiles($RawDir)
     $totalLocal = $allFiles.Count
-    $localScanCount = 0
-    Write-Host "  [SCAN] Analyse des fichiers locaux ($totalLocal fichiers)..." -ForegroundColor Gray
-    
-    # Parallélisation du Scan Local (Multi-Coeur)
-    $localIds = [System.Collections.Generic.HashSet[string]]::new()
-    $results = $allFiles | ForEach-Object -Parallel {
-        $fName = [System.IO.Path]::GetFileName($_)
-        $fExt = [System.IO.Path]::GetExtension($_)
-        $foundId = $null
-        function Get-SafeContent($p, $r) {
-            $i = 0; while ($i -lt 3) { try { return [System.IO.File]::ReadAllText($p) } catch { $i++; Start-Sleep -Milliseconds 200 } }
-            return ""
+    if ($totalLocal -gt 0) {
+        $results = $allFiles | ForEach-Object {
+            $fName = [System.IO.Path]::GetFileName($_)
+            $fExt = [System.IO.Path]::GetExtension($_)
+            $foundId = $null
+            if ($fName -match "\[([a-zA-Z0-9_-]{11})\]") {
+                $foundId = $Matches[1]
+            } elseif ($fExt -eq ".json") {
+                $content = Get-SafeContent $_
+                if ($content -match '"id":\s*"([a-zA-Z0-9_-]{11})"') { $foundId = $Matches[1] }
+            }
+            if ($foundId) { $foundId }
         }
-        
-        if ($fName -match "\[([a-zA-Z0-9_-]{11})\]") {
-            $foundId = $Matches[1]
-        } elseif ($fExt -eq ".json") {
-            $content = Get-SafeContent $_ $true
-            if ($content -match '"id":\s*"([a-zA-Z0-9_-]{11})"') { $foundId = $Matches[1] }
-        }
-        if ($foundId) { $foundId }
-    } -ThrottleLimit 8 # On utilise 8 threads en parallèle
-
-    foreach ($id in $results) { [void]$localIds.Add($id) }
-    Write-Host "`r  [SUCCES] Scan local termine ($($localIds.Count) IDs trouves).          " -ForegroundColor Gray
+        foreach ($id in $results) { [void]$localIds.Add($id) }
+    }
+    Write-Host "  [SUCCES] Inventaire complet : $($localIds.Count) videos locales.          " -ForegroundColor Gray
 
     $toDownload = [System.Collections.Generic.List[string]]::new()
     foreach ($mid in $masterIds) { 
@@ -328,66 +448,110 @@ function Sync-YouTube {
     if ($toDownload.Count -gt 0) {
         Write-Log "$($toDownload.Count) videos manquantes." "Yellow" $LogPrefix
         $errorCount = 0; $currentIndex = 1; $totalVideos = $toDownload.Count
-
+        $consecutive429 = 0
         foreach ($id in $toDownload.ToArray()) {
-            $isPremium = $false
             $vTitle = if ($titlesMap.ContainsKey($id)) { $titlesMap[$id] } else { "Titre inconnu" }
-            Write-Host "[$LogPrefix] [DOWNLOAD $currentIndex/$totalVideos] $id - $vTitle" -ForegroundColor White
-            $vidUrl = "https://www.youtube.com/watch?v=" + $id
-            $noSubsFound = $false; $currentTitle = "ID: $id"
-
-            $dlpCmd = {
-                & $YtDlp --user-agent $userAgent @useCookies `
-                    --ffmpeg-location $Ffmpeg --quiet --no-warnings `
-                    --write-auto-sub --write-info-json --ignore-errors `
-                    --sub-langs ($Lang -eq "auto" ? "fr,en" : $Lang) --skip-download --convert-subs srt `
-                    --min-sleep-interval 5 --max-sleep-interval 15 --sleep-requests 1 `
-                    --download-archive (Join-Path $BaseDir "archive.txt") `
-                    -o (Join-Path $RawDir "%(upload_date)s - %(title)s [%(id)s].%(ext)s") $vidUrl 2>&1
-            }
+            Write-Host "[$LogPrefix] [INGEST $currentIndex/$totalVideos] $id - $vTitle" -ForegroundColor White
             
-            $outputLines = $dlpCmd.Invoke() | ForEach-Object {
-                $line = $_.ToString()
-                if ($line -match "Writing video metadata as JSON to: .*\\(\d{8} - .*)\.info\.json") { $currentTitle = $Matches[1] }
-                elseif ($line -match "(?i)ERROR: (.*)") { Write-Host "  [!] $($Matches[1])" -ForegroundColor Red }
-                
-                # DETECTION AUTOMATIQUE DE BLACKLIST (Premium/Members-Only)
-                if ($line -match "Join this channel|members-only") {
-                    $isPremium = $true
-                }
-                
-                Write-Log $line "White" $LogPrefix -ErrorAction SilentlyContinue
-                $line
+            # 1. Fetch Metadata (with 429 Strike Tracking)
+            $meta = $null
+            $retryCount = 0; $maxRetries = 2
+            $found429 = $false
+            while ($retryCount -lt $maxRetries) {
+                $rawMeta = & $global:YtDlp --user-agent $global:userAgent @global:useCookies --quiet --no-warnings -j "https://www.youtube.com/watch?v=$id" 2>&1 | Out-String
+                if ($rawMeta -match "429: Too Many Requests") {
+                    $found429 = $true; break
+                } elseif ($rawMeta.Trim().StartsWith("{")) {
+                    try { $meta = $rawMeta | ConvertFrom-Json; break } catch { $retryCount++; Start-Sleep -Seconds 5 }
+                } else { break }
             }
 
-            if ($isPremium) {
-                Write-Host "  [!] Video réservée aux membres. Auto-blacklistage..." -ForegroundColor Yellow
-                $id + " # Members-only (Auto-Detected)" | Add-Content -LiteralPath $BlacklistPath -Encoding utf8
-                $toDownload.Remove($id) | Out-Null
-                $toDownload | Out-File -LiteralPath $missingListPath -Encoding utf8
+            if ($found429) {
+                $consecutive429++
+                Write-Host "    [!] Strike $consecutive429/3 (Rate Limit 429)" -ForegroundColor Yellow
+                if ($consecutive429 -ge 3) {
+                    Write-Host "    [!!!] 3 Strikes! Mise en pause de cette chaine pour 1 HEURE." -ForegroundColor Red
+                    return @{ Playlist = $originalMasterIds.Count; Local = $localIds.Count; Ignored = $ignoredByBlacklist; Status = "BACKOFF_1H" }
+                }
                 $currentIndex++; continue
             }
+            $consecutive429 = 0 # Reset si succes
 
-            if ($noSubsFound) {
-                Write-Host "  [!] Aucun sous-titre trouve pour cette video." -ForegroundColor Yellow
-                $blacklistCandidates.Add([PSCustomObject]@{ ID=$id; Title=$currentTitle; Prefix=$LogPrefix })
+            if (!$meta) {
+                Write-Host "    [!] Impossible de recuperer les metadonnees." -ForegroundColor Yellow
+                $currentIndex++; continue
             }
-
-            $newFiles = Get-ChildItem -Path $RawDir -Filter "*$id*" -Include "*.srt", "*.vtt" -Recurse
-            if ($newFiles.Count -gt 0) {
-                $errorCount = 0; $toDownload.Remove($id)
-                $toDownload | Out-File -LiteralPath $missingListPath -Encoding utf8
+            
+            # 2. Identification (Premium / No-Subs)
+            $statusTag = "DONE"
+            $isPremium = $meta.availability -ne "public" -and $meta.availability -ne "unlisted"
+            if ($isPremium) {
+                $statusTag = "PREMIUM"
+                Write-Host "    [!] Video Premium. Skip." -ForegroundColor Yellow
             } else {
-                $errorCount++; $errorMsg = "Echec de telechargement sur $id ($errorCount/3)"
-                if ($outputLines -match "429") {
-                    $errorMsg += " [HTTP 429: Too Many Requests]"
-                    if (!(Test-Path $LogsDir)) { New-Item -ItemType Directory -Path $LogsDir | Out-Null }
-                    $log429 = Join-Path $LogsDir "429_errors.txt"
-                    "$id | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | $LogPrefix" | Add-Content -Path $log429
+                $hasSubs = $meta.subtitles.PSObject.Properties.Name.Count -gt 0 -or $meta.automatic_captions.PSObject.Properties.Name.Count -gt 0
+                if (!$hasSubs) {
+                    $statusTag = "NO_SUBS"
+                    Write-Host "    [!] Aucun sous-titre. Skip." -ForegroundColor Yellow
                 }
-                Write-Log $errorMsg "Red" $LogPrefix
-                if ($errorCount -ge 3) { Write-Log "3 echecs consecutifs. Pause de 15 minutes..." "Yellow" $LogPrefix; Start-Sleep -Seconds 900; $errorCount = 0 }
             }
+
+            if ($statusTag -ne "DONE") {
+                $dbPath = Ensure-ChannelDb -ChannelName $LogPrefix
+                $eTitle = $meta.title -replace "'", "''"
+                $sql = "INSERT OR REPLACE INTO videos (youtube_id, title, upload_date, duration, view_count, channel, status) VALUES ('$id', '$eTitle', '$($meta.upload_date)', $($meta.duration), $($meta.view_count), '$($meta.channel)', '$statusTag');"
+                Invoke-Sqlite -DbPath $dbPath -Query $sql | Out-Null
+                $currentIndex++; continue
+            }
+            
+            # 3. Download Subtitles
+            $tempSubDir = Join-Path $global:BaseDir "_TEMP\subs_$id"
+            if (Test-Path $tempSubDir) { Remove-Item -Path $tempSubDir -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Path $tempSubDir -Force | Out-Null
+            
+            # On cherche FR ou EN
+            $targetLang = if ($Lang -eq "auto") { "fr", "en" } else { @($Lang) }
+            $foundFile = $null
+            foreach ($l in $targetLang) {
+                $dlpArgs = @("--skip-download", "--no-playlist", "--no-warnings", "--write-sub", "--write-auto-sub", "--sub-langs", $l, "-o", (Join-Path $tempSubDir "sub"), "https://www.youtube.com/watch?v=$id")
+                $dlpOut = & $global:YtDlp @dlpArgs 2>&1
+                $subFile = Get-ChildItem -Path $tempSubDir -Filter "sub.*" | Where-Object { $_.Extension -match "srt|vtt" } | Select-Object -First 1
+                if ($subFile) { $foundFile = $subFile; break }
+            }
+
+            if ($foundFile) {
+                $rawText = [System.IO.File]::ReadAllText($foundFile.FullName, [System.Text.Encoding]::UTF8)
+                $cleanText = Get-CleanTranscript -content $rawText
+                if ($cleanText.Length -gt 100) {
+                    $dbPath = Ensure-ChannelDb -ChannelName $LogPrefix
+                    $sTitle = $meta.title -replace '\?{3,}', "'"
+                    $eTitle = $sTitle -replace "'", "''"
+                    $eDesc = $meta.description -replace "'", "''"
+                    $cleanDate = $meta.upload_date -replace '^(\d{4})(\d{2})(\d{2})$', '$3/$2/$1'
+                    
+                    $header = "====================================`nSOURCE: YouTube - $LogPrefix`nTITLE: $sTitle`nURL: https://www.youtube.com/watch?v=$id`nDATE: $cleanDate`n====================================`n`n"
+                    $eText = ($header + $cleanText) -replace "'", "''"
+                    
+                    $sql = "INSERT OR REPLACE INTO videos (youtube_id, title, upload_date, duration, view_count, channel, description, transcript, status) VALUES ('$id', '$eTitle', '$($meta.upload_date)', $($meta.duration), $($meta.view_count), '$($meta.channel)', '$eDesc', '$eText', 'DONE');"
+                    Invoke-Sqlite -DbPath $dbPath -Query $sql | Out-Null
+                    Write-Host "    [SUCCES] Ingestion reussie." -ForegroundColor Green
+                    $toDownload.Remove($id) | Out-Null
+                    $toDownload | Out-File -LiteralPath $missingListPath -Encoding utf8
+                $dlpStr = $dlpOut | Out-String
+                if ($dlpStr -match "429|Too Many Requests") { $reason = "RETRY_429" }
+                elseif ($dlpStr -match "Premium|copyright|Music|protected") { $reason = "PREMIUM" }
+                elseif ($dlpStr -match "available|subtitles") { $reason = "NO_SUBS" }
+                
+                # On insere en base avec le statut d'erreur pour que l'audit le voit
+                $dbPath = Ensure-ChannelDb -ChannelName $LogPrefix
+                $sTitle = $meta.title -replace "'", "''"
+                $sql = "INSERT OR REPLACE INTO videos (youtube_id, title, upload_date, duration, view_count, channel, status) VALUES ('$id', '$sTitle', '$($meta.upload_date)', $($meta.duration), $($meta.view_count), '$($meta.channel)', '$reason');"
+                Invoke-Sqlite -DbPath $dbPath -Query $sql | Out-Null
+                Write-Host "  [!] Echec du telechargement ($reason)." -ForegroundColor Red
+            }
+            
+            # Cleanup temp
+            Remove-Item -Path $tempSubDir -Recurse -Force -ErrorAction SilentlyContinue
             $currentIndex++
         }
     }
@@ -405,192 +569,178 @@ function Sync-YouTube {
         $blDetail = if ($details) { " (" + ($details -join ", ") + ")" } else { "" }
     }
 
-    return @{ Playlist = $originalMasterIds.Count; Local = $rawIdsCount; Ignored = $ignoredByBlacklist; Detail = $blDetail; Missing = $toDownload.Count }
+    return @{ Playlist = $originalMasterIds.Count; Local = $localIds.Count; Ignored = $ignoredByBlacklist; Detail = $blDetail; Missing = $toDownload.Count }
 }
 
 function Process-LocalFiles {
     param ($RawDir, $TxtDir, $DenseDir, $Lang, $Prefix)
     
     $rawFiles = Get-ChildItem -LiteralPath $RawDir -Filter "*.info.json"
-    $newDenseCount = 0
-    $results = $rawFiles | ForEach-Object -Parallel {
+    $newCount = 0
+    $dbPath = Ensure-ChannelDb -ChannelName $Prefix
+    
+    # On pre-verifie la base pour ne pas re-traiter ce qui y est deja
+    $dbIds = [System.Collections.Generic.HashSet[string]]::new()
+    $existing = Invoke-Sqlite -DbPath $dbPath -Query "SELECT youtube_id FROM videos;"
+    if ($existing) { foreach ($row in $existing) { [void]$dbIds.Add($row.youtube_id.Trim()) } }
+
+    Write-Host "  [DEBUG] $Prefix : $($rawFiles.Count) JSON trouves, $($dbIds.Count) en base." -ForegroundColor Cyan
+
+    $results = $rawFiles | ForEach-Object {
         $json = $_
-        $RawDir = $using:RawDir
-        $TxtDir = $using:TxtDir
-        $DenseDir = $using:DenseDir
-        $Lang = $using:Lang
-        $Settings = $using:global:Settings
         
         $id = ""; if ($json.Name -match "\[([a-zA-Z0-9_-]{11})\]\.info\.json$") { $id = $Matches[1] }
-        if (!$id) { return $false }
+        if (!$id) {
+            try {
+                $content = Get-SafeContent -Path $json.FullName -Raw $true
+                if ($content -match '"id":\s*"([a-zA-Z0-9_-]{11})"') { $id = $Matches[1] }
+            } catch {}
+        }
         
-        $baseName = $json.Name -replace '\.info\.json$', ''
-        $txtPath = Join-Path $TxtDir ($baseName + ".txt")
-        $densePath = Join-Path $DenseDir ($baseName + ".dense.txt")
-        
-        if (Test-Path -LiteralPath $densePath) { 
-            if ($Settings.AutoClean) {
-                Get-ChildItem -LiteralPath $RawDir | Where-Object { $_.Name.StartsWith($baseName + ".") -and $_.Extension -match "vtt|srt" } | Remove-Item -Force -ErrorAction SilentlyContinue
-                if (Test-Path -LiteralPath $txtPath) { Remove-Item -LiteralPath $txtPath -Force -ErrorAction SilentlyContinue }
+        if (!$id) { Write-Host "    [DEBUG] ID non trouve pour $($json.Name)" -ForegroundColor Yellow; return $null }
+        if ($dbIds.Contains($id)) { 
+            if ($global:Settings.AutoClean) {
+                $base = $json.Name -replace '\.info\.json$', ''
+                Get-ChildItem -LiteralPath $RawDir | Where-Object { $_.Name.StartsWith($base) } | Remove-Item -Force -ErrorAction SilentlyContinue
             }
-            return $false 
+            return $null 
+        }
+        
+        Write-Host "    [DEBUG] Traitement de ID: $id ($($json.Name))" -ForegroundColor Gray
+        
+        $subFile = $null
+        # 1. Recherche par ID (robuste aux accents)
+        $potentialSubs = Get-ChildItem -LiteralPath $RawDir -Filter "*$id*.srt"
+        if (!$potentialSubs) { $potentialSubs = Get-ChildItem -LiteralPath $RawDir -Filter "*$id*.vtt" }
+        
+        # 2. Fallback : Correspondance stricte par nom de base (si pas d'ID dans le nom)
+        if (!$potentialSubs) {
+            $baseName = $json.Name -replace '\.info\.json$', ''
+            $potentialSubs = Get-ChildItem -LiteralPath $RawDir -Filter "$baseName*.srt"
+            if (!$potentialSubs) { $potentialSubs = Get-ChildItem -LiteralPath $RawDir -Filter "$baseName*.vtt" }
         }
 
-        $subFile = $null
-        $checkSuffixes = if ($Lang -eq "auto") { @(".fr", ".en", "") } else { @(".$Lang", "") }
-        foreach ($suffix in $checkSuffixes) {
-            $f = Join-Path $RawDir ($baseName + $suffix + ".srt")
-            if (Test-Path -LiteralPath $f) { $subFile = $f; break }
-            $f = Join-Path $RawDir ($baseName + $suffix + ".vtt")
-            if (Test-Path -LiteralPath $f) { $subFile = $f; break }
+        if ($potentialSubs) {
+            # Priorite a la langue demandee
+            $subFile = $potentialSubs | Where-Object { $_.Name -match "\.$Lang\.(srt|vtt)$" } | Select-Object -First 1 -ExpandProperty FullName
+            if (!$subFile) { $subFile = $potentialSubs | Select-Object -First 1 -ExpandProperty FullName }
         }
 
         if ($subFile) {
             try {
-                $content = Get-Content -LiteralPath $subFile -Raw
-                # Nettoyage ultra-agressif des VTT et artifacts
-                $txt = $content
-                $txt = $txt -replace '(?s)<.*?>', '' # Tags HTML/VTT (<c>, <v>, etc.)
-                $txt = $txt -replace '(?m)^WEBVTT\s*$', '' # Header VTT
-                $txt = $txt -replace '(?m)^Kind:.*$', ''
-                $txt = $txt -replace '(?m)^Language:.*$', ''
+                $content = Get-SafeContent -p $subFile
+                $finalTxt = Get-CleanTranscript -content $content
                 
-                # Nettoyage radical des timestamps et metadonnees d'alignement (meme si fusionnes sur une ligne)
-                # On vise le pattern: 00:00:00.000 --> 00:00:00.000
-                $txt = $txt -replace '\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}', ' '
-                # On vise les tags de positionnement: align:start, position:0%, etc.
-                $txt = $txt -replace '\b(align|position|size|line|vertical):\S+', ' '
-                
-                # Nettoyage des chiffres isolés (compteurs de blocs SRT) en début de ligne
-                $txt = $txt -replace '(?m)^\d+\s*$', ''
-                
-                # Re-nettoyage des espaces multiples
-                $txt = $txt -replace '\s+', ' '
-                
-                # Suppression des balises residuelles et entites HTML
-                $txt = $txt -replace 'align:\S+|position:\S+|line:\S+|size:\S+|region:\S+|<.*?>', ' '
-                $txt = $txt -replace '&\w+;', ' '
-
-                
-                # Nettoyage des indices numeriques seuls (souvent presents dans SRT/VTT)
-                $txt = $txt -replace '(?m)^\d+\s*$', ''
-                
-                # Si le texte est "aplatit" (tout sur une ligne), on tente de dedupliquer les mots repetitifs (rolling captions)
-                # On split par espace, on garde l'ordre mais on enleve les repetitions immediates
-                $words = $txt -split "\s+" | Where-Object { $_ -ne "" }
-                $uniqueWords = [System.Collections.Generic.List[string]]::new()
-                $lastWord = ""
-                foreach ($w in $words) {
-                    if ($w -ne $lastWord) {
-                        $uniqueWords.Add($w)
-                        $lastWord = $w
-                    }
+                # Verification de qualite avant insertion
+                if ($finalTxt -match "\?\?\?\?" -or $finalTxt -match "-->") {
+                    Write-Host "    [!] Erreur fatale de nettoyage/encodage. Ingestion annulee pour cet ID." -ForegroundColor Red
+                    return $null
                 }
-                $finalTxt = $uniqueWords -join " "
                 
                 if ($finalTxt.Trim().Length -gt 10) {
-                    $finalTxt | Out-File -LiteralPath $txtPath -Encoding utf8
-                    
-                    # On ne garde que l'essentiel de la meta pour le fichier dense (evite les leaks de 2MB de JSON)
-                    try {
-                        # Dans un bloc parallèle, on utilise une version simplifiée du retry car Get-SafeContent n'est pas visible
-                        $jsonMeta = ""
-                        $maxR = 3; $currR = 0
-                        while ($jsonMeta -eq "" -and $currR -lt $maxR) {
-                            try { $currR++; $jsonMeta = [System.IO.File]::ReadAllText($json.FullName) } catch { Start-Sleep -Milliseconds 300 }
-                        }
-                        
-                        if ($jsonMeta -match '\{') {
-                            $meta = $jsonMeta | ConvertFrom-Json -AsHashTable
-                            $compactMeta = @{
-                                id = $meta.id
-                                title = $meta.title
-                                upload_date = $meta.upload_date
-                                duration = $meta.duration
-                                channel = $meta.channel
-                                description = $meta.description
-                                view_count = $meta.view_count
-                            } | ConvertTo-Json -Compress
-                            $denseContent = "[METADATA]" + $compactMeta + "[/METADATA]" + "`r`n`r`n" + $finalTxt
-                        } else {
-                            throw "JSON read failed"
-                        }
-                    } catch {
-                        $denseContent = "[METADATA_RAW]" + ($jsonMeta.Substring(0, [Math]::Min(1000, $jsonMeta.Length))) + "[/METADATA_RAW]" + "`r`n`r`n" + $finalTxt
+                    $jsonContent = Get-SafeContent -Path $json.FullName -Raw $true | ConvertFrom-Json
+                    Write-Host "    [DEBUG] OK: $($jsonContent.title)" -ForegroundColor Green
+                    return [PSCustomObject]@{
+                        Id = $id
+                        Title = $jsonContent.title
+                        Date = $jsonContent.upload_date
+                        Duration = [int]$jsonContent.duration
+                        Views = [int]$jsonContent.view_count
+                        Channel = $jsonContent.channel
+                        Description = $jsonContent.description
+                        Transcript = $finalTxt
+                        FilesToDelete = @($json.FullName, $subFile)
                     }
-                    
-                    $denseContent | Out-File -LiteralPath $densePath -Encoding utf8
-                    
-                    if ($Settings.AutoClean) {
-                        Remove-Item -LiteralPath $subFile -Force -ErrorAction SilentlyContinue
-                        if (Test-Path -LiteralPath $txtPath) { Remove-Item -LiteralPath $txtPath -Force -ErrorAction SilentlyContinue }
-                    }
-                    return $true
+                } else {
+                    Write-Host "    [DEBUG] Transcript trop court ($($finalTxt.Length) chars)" -ForegroundColor Yellow
                 }
-            } catch { }
+            } catch {
+                Write-Host "    [DEBUG] Erreur lecture: $($_.Exception.Message)" -ForegroundColor Red
+            }
+        } else {
+            Write-Host "    [DEBUG] Aucun fichier sous-titre trouve pour $id" -ForegroundColor Yellow
         }
-        return $false
-    } -ThrottleLimit 8
+        return $null
+    }
     
-    $newDenseCount = ($results | Where-Object { $_ -eq $true }).Count
-    return $newDenseCount
+    # Insertion groupee en base
+    $toInsert = $results | Where-Object { $_ -ne $null }
+    Write-Host "  [DEBUG] Nombre d'objets a inserer : $($toInsert.Count)" -ForegroundColor Cyan
+    if ($toInsert) {
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.AppendLine("BEGIN TRANSACTION;")
+        foreach ($res in $toInsert) {
+            $eTitle = $res.Title -replace "'", "''"
+            $eTranscript = $res.Transcript -replace "'", "''"
+            $eDesc = $res.Description -replace "'", "''"
+            $eChannel = $res.Channel -replace "'", "''"
+            $sql = "INSERT OR REPLACE INTO videos (youtube_id, title, upload_date, duration, view_count, channel, description, transcript, status) " +
+                   "VALUES ('$($res.Id)', '$eTitle', '$($res.Date)', $($res.Duration), $($res.Views), '$eChannel', '$eDesc', '$eTranscript', 'PROCESSED');"
+            [void]$sb.AppendLine($sql)
+            if ($global:Settings.AutoClean) { foreach ($f in $res.FilesToDelete) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }
+            $newCount++
+        }
+        [void]$sb.AppendLine("COMMIT;")
+        Invoke-Sqlite -DbPath $dbPath -Query $sb.ToString()
+    }
+    return $newCount
 }
-
+                        
 function Build-Packs {
     param ($DenseDir, $PacksDir, $Prefix, $LogPrefix, $GlobalPacksDir)
     
-    if (!(Test-Path -LiteralPath $DenseDir)) { 
-        New-Item -ItemType Directory -Force -Path $DenseDir | Out-Null
-        return 
-    }
     if (!(Test-Path -LiteralPath $PacksDir)) { New-Item -ItemType Directory -Force -Path $PacksDir | Out-Null }
     
-    $denseFiles = Get-ChildItem -LiteralPath $DenseDir -Filter "*.txt" | Sort-Object Name
-    $packsPlan = [System.Collections.Generic.List[PSObject]]::new()
-    $currentBatch = [System.Collections.Generic.List[PSObject]]::new(); $currentWords = 0; $packNum = 1
+    $dbPath = Join-Path $global:DbDir "$($Prefix).db"
+    if (!(Test-Path $dbPath)) { return 0 }
 
-    foreach ($file in $denseFiles) {
-        $content = Get-Content -LiteralPath $file.FullName -Raw
-        $txtOnly = if ($content -match "\[/METADATA.*?\](?:\r?\n){2}(.*)") { $Matches[1] } else { $content }
-        $wordCount = ($txtOnly -split "\s+" | Where-Object { $_ -ne "" }).Count
+    Write-Host "  [DB] Generation des packs depuis la base de donnees..." -ForegroundColor Gray
+    
+    $query = "SELECT youtube_id, title, upload_date, duration, transcript FROM videos WHERE transcript IS NOT NULL AND transcript <> '' ORDER BY upload_date ASC;"
+    $rawData = & $global:Sqlite -separator "|||" $dbPath $query
+    
+    $packsPlan = [System.Collections.Generic.List[PSObject]]::new()
+    $currentBatch = [System.Collections.Generic.List[PSObject]]::new()
+    $currentWords = 0
+    $packNum = 1
+
+    foreach ($line in $rawData) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $parts = $line -split "\|\|\|"
+        if ($parts.Count -lt 5) { continue }
+        
+        $vId = $parts[0]; $vTitle = $parts[1]; $vDate = $parts[2]; $vDur = $parts[3]; $vTranscript = $parts[4]
+        $wordCount = ($vTranscript -split "\s+" | Where-Object { $_ -ne "" }).Count
+        
         if (($currentWords + $wordCount) -gt 500000 -and $currentBatch.Count -gt 0) {
-            $packsPlan.Add([PSCustomObject]@{ ID=$packNum; Files=$currentBatch.ToArray(); TotalWords=$currentWords; Start=$currentBatch[0].Name.Substring(0,8); End=$currentBatch[-1].Name.Substring(0,8) })
+            $packsPlan.Add([PSCustomObject]@{ ID = $packNum; Vids = $currentBatch.ToArray(); TotalWords = $currentWords; Start = $currentBatch[0].Date; End = $currentBatch[-1].Date })
             $packNum++; $currentBatch = [System.Collections.Generic.List[PSObject]]::new(); $currentWords = 0
         }
-        $currentBatch.Add($file); $currentWords += $wordCount
+        $currentBatch.Add([PSCustomObject]@{ Id = $vId; Title = $vTitle; Date = $vDate; Duration = $vDur; Transcript = $vTranscript })
+        $currentWords += $wordCount
     }
     if ($currentBatch.Count -gt 0) {
-        $packsPlan.Add([PSCustomObject]@{ ID=$packNum; Files=$currentBatch.ToArray(); TotalWords=$currentWords; Start=$currentBatch[0].Name.Substring(0,8); End=$currentBatch[-1].Name.Substring(0,8) })
+        $packsPlan.Add([PSCustomObject]@{ ID = $packNum; Vids = $currentBatch.ToArray(); TotalWords = $currentWords; Start = $currentBatch[0].Date; End = $currentBatch[-1].Date })
     }
 
     if (Test-Path $GlobalPacksDir) {
-        Get-ChildItem -Path $GlobalPacksDir -Filter ($Prefix + "_*.txt") | Where-Object { $_.Name -match "^$Prefix(_ULTRA)?_\d{2}_\(" } | ForEach-Object { 
-            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue 
-        }
+        Get-ChildItem -Path $GlobalPacksDir -Filter ($Prefix + "_*.txt") | Where-Object { $_.Name -match "^$Prefix(_ULTRA)?_\d{2}_\(" } | Remove-Item -Force -ErrorAction SilentlyContinue 
     }
-    if ($packsPlan.Count -gt 0) {
-        foreach ($plan in $packsPlan) {
-            $sFmt = $plan.Start -replace '^(\d{4})(\d{2})(\d{2})$', '$1.$2.$3'; $eFmt = $plan.End -replace '^(\d{4})(\d{2})(\d{2})$', '$1.$2.$3'
-            $pName = $Prefix + "_" + $plan.ID.ToString("00") + "_(" + $sFmt + "-au-" + $eFmt + ").txt"
-            $pPath = Join-Path $PacksDir $pName
-            $sb = New-Object System.Text.StringBuilder
-            foreach ($b in $plan.Files) { 
-                $content = Get-SafeContent -Path $b.FullName -Raw $true
-                $duration = if ($content -match '"duration":\s*(\d+)') { $Matches[1] } else { 0 }
-                $txtOnly = if ($content -match "\[/METADATA.*?\](?:\r?\n){2}(.*)") { $Matches[1] } else { $content }
-                [void]$sb.AppendLine($txtOnly)
-                [void]$sb.AppendLine("`r`n################################### SOURCE: $($b.BaseName) [DUR:$duration] ###################################`r`n") 
-            }
-            $sb.ToString() | Out-File -LiteralPath $pPath -Encoding utf8
-            
-            # Export securise vers ALL_PACKS
-            if ($GlobalPacksDir -and (Test-Path $GlobalPacksDir)) {
-                $globalTarget = Join-Path $GlobalPacksDir $pName
-                try {
-                    if (Test-Path -LiteralPath $globalTarget) { Remove-Item -LiteralPath $globalTarget -Force -ErrorAction SilentlyContinue }
-                    Copy-Item -LiteralPath $pPath -Destination $globalTarget -Force
-                } catch { }
-            }
+
+    foreach ($plan in $packsPlan) {
+        $sFmt = $plan.Start -replace '^(\d{4})(\d{2})(\d{2})$', '$1.$2.$3'
+        $eFmt = $plan.End -replace '^(\d{4})(\d{2})(\d{2})$', '$1.$2.$3'
+        if (!$sFmt) { $sFmt = "0000.00.00" }; if (!$eFmt) { $eFmt = "0000.00.00" }
+        $pName = $Prefix + "_" + $plan.ID.ToString("00") + "_(" + $sFmt + "-au-" + $eFmt + ").txt"
+        $pPath = Join-Path $PacksDir $pName
+        $sb = New-Object System.Text.StringBuilder
+        foreach ($v in $plan.Vids) {
+            [void]$sb.AppendLine($v.Transcript)
+            [void]$sb.AppendLine("`r`n################################### SOURCE: $($v.Title) [$($v.Id)] [DUR:$($v.Duration)] ###################################`r`n")
+        }
+        $sb.ToString() | Out-File -LiteralPath $pPath -Encoding utf8
+        if ($GlobalPacksDir -and (Test-Path $GlobalPacksDir)) {
+            Copy-Item -LiteralPath $pPath -Destination (Join-Path $GlobalPacksDir $pName) -Force -ErrorAction SilentlyContinue
         }
     }
     return $packsPlan.Count
@@ -614,8 +764,8 @@ function Repair-Packs {
             }
             elseif ($f.Extension -eq ".json") {
                 try {
-                    # Utilisation de -LiteralPath pour eviter les erreurs sur les []
-                    $content = Get-Content -LiteralPath $f.FullName -Raw -ErrorAction Stop
+                    # Utilisation de Get-SafeContent pour l'encodage robuste
+                    $content = Get-SafeContent -Path $f.FullName -Raw $true
                     $null = $content | ConvertFrom-Json -AsHashTable -ErrorAction Stop
                 } catch {
                     $reason = $_.Exception.Message
@@ -641,8 +791,8 @@ function Repair-Packs {
             $reason = ""
             if ($textContent -match '"formats":' -or $textContent -match '"url":' -or $textContent -match '"downloader_options":') {
                 $isDirty = $true; $reason = "Fuite JSON"
-            } elseif ($textContent -match '-->|\b(align|position|size|line|vertical):') {
-                $isDirty = $true; $reason = "Artifacts VTT (Timestamps/Align)"
+            } elseif ($f.Name -match "\?\?\?\?" -or $textContent -match "\?\?\?\?" -or $textContent -match '-->|\b(align|position|size|line|vertical):') {
+                $isDirty = $true; $reason = "Artifacts VTT (Timestamps/Align/Encoding)"
             }
 
             if ($isDirty) {
@@ -658,6 +808,10 @@ function Repair-Packs {
                     $derivedFiles = Get-ChildItem -Path $BaseDir -Recurse -File | Where-Object { $_.Name -match "\[$id\]" -and $_.Extension -eq ".txt" }
                     foreach ($df in $derivedFiles) { Remove-Item -LiteralPath $df.FullName -Force -ErrorAction SilentlyContinue }
                     
+                    # Purge de la base de donnees pour forcer le re-traitement par Process-LocalFiles
+                    $dbPath = Ensure-ChannelDb -ChannelName $Prefix
+                    Invoke-Sqlite -DbPath $dbPath -Query "DELETE FROM videos WHERE youtube_id = '$id';" | Out-Null
+                    
                     # On ne supprime le RAW que si c'est une fuite JSON (source probablement corrompue)
                     if ($reason -eq "Fuite JSON") {
                         Write-Host "      [!] Source corrompue suspectee. Marquage pour re-telechargement." -ForegroundColor Yellow
@@ -668,6 +822,23 @@ function Repair-Packs {
                     # Si pas d'ID trouve dans le nom du fichier DENSE, on supprime au moins ce fichier corrompu
                     Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
                 }
+            }
+        }
+    }
+    
+    # 3. Verification de la base de donnees (Titres corrompus avec ????)
+    $dbPath = Ensure-ChannelDb -ChannelName $Prefix
+    if (Test-Path $dbPath) {
+        $corruptedDb = Invoke-Sqlite -DbPath $dbPath -Query "SELECT youtube_id, title FROM videos WHERE title LIKE '%????%';"
+        if ($corruptedDb) {
+            foreach ($row in $corruptedDb) {
+                $id = $row.youtube_id
+                Write-Host "    [!] Titre corrompu (????) detecte dans la DB : $($row.title)" -ForegroundColor Red
+                $corruptedCount++
+                Invoke-Sqlite -DbPath $dbPath -Query "DELETE FROM videos WHERE youtube_id = '$id';" | Out-Null
+                # Nettoyage des fichiers pour forcer re-traitement
+                $derivedFiles = Get-ChildItem -Path $BaseDir -Recurse -File | Where-Object { $_.Name -match "\[$id\]" -and $_.Extension -eq ".txt" }
+                foreach ($df in $derivedFiles) { Remove-Item -LiteralPath $df.FullName -Force -ErrorAction SilentlyContinue }
             }
         }
     }
@@ -765,8 +936,8 @@ function Review-GlobalPacks($GlobalPacksDir) {
     $packs = Get-ChildItem -LiteralPath $GlobalPacksDir -Filter "*.txt" | Where-Object { $_.Name -notmatch "^_" } | Sort-Object Name
     if ($packs.Count -eq 0) { Write-Host "  [!] Aucun pack detecte dans ALL_PACKS." -ForegroundColor Gray; return }
     
-    Write-Host "`n  📊  BILAN DES PACKS GENERES" -ForegroundColor Cyan
-    Write-Host "  " + ("═" * 60) -ForegroundColor Cyan
+    Write-Host "`n  ????  BILAN DES PACKS GENERES" -ForegroundColor Cyan
+    Write-Host "  " + ("a??" * 60) -ForegroundColor Cyan
     Write-Host "  Pack Name".PadRight(34) + "Vids".PadLeft(5) + "Hours".PadLeft(8) + "Words".PadLeft(13) -ForegroundColor Gray
     
     $totalWords = 0; $totalVids = 0; $totalSecs = 0
@@ -803,9 +974,9 @@ function Review-GlobalPacks($GlobalPacksDir) {
         Write-Host "$($hrs.ToString('F1').PadLeft(7))h" -NoNewline -ForegroundColor Gray
         Write-Host " $($words.ToString('N0').PadLeft(11))" -ForegroundColor $color
     }
-    Write-Host "  " + ("═" * 60) -ForegroundColor Cyan
+    Write-Host "  " + ("a??" * 60) -ForegroundColor Cyan
     $totalHrs = $totalSecs / 3600
-    Write-Host "  TOTAL : $($totalWords.ToString('N0')) mots | $($totalVids) vidéos | $($totalHrs.ToString('N1'))h dans $($packs.Count) packs." -ForegroundColor Gray
+    Write-Host "  TOTAL : $($totalWords.ToString('N0')) mots | $($totalVids) videos | $($totalHrs.ToString('N1'))h dans $($packs.Count) packs." -ForegroundColor Gray
 }
 
 function Clean-GlobalPacks {
@@ -838,16 +1009,16 @@ function Run-LanguageDiagnostic {
     param ($SpecificChannelDir = $null)
     
     $idsToCheck = [System.Collections.Generic.HashSet[string]]::new()
-    $currentBL = Get-Content -LiteralPath $BlacklistPath
+    $currentBL = Get-Content -LiteralPath $global:BlacklistPath
     
     if (!$SpecificChannelDir) {
         Write-Host "`n=================================================" -ForegroundColor Cyan
         Write-Host "   DIAGNOSTIC DE LANGUE ET FILTRAGE AUTO" -ForegroundColor Cyan
         Write-Host "=================================================" -ForegroundColor Cyan
         
-        Write-Host "  Quelles vidéos analyser ?" -ForegroundColor White
+        Write-Host "  Quelles videos analyser ?" -ForegroundColor White
         Write-Host "  1. Nouveaux IDs (missing_videos.txt, 429_errors.txt)"
-        Write-Host "  2. Catégorie spécifique Blacklist (ex: [TO-REVIEW] ou [SUB-KO])"
+        Write-Host "  2. Categorie specifique Blacklist (ex: [TO-REVIEW] ou [SUB-KO])"
         Write-Host "  3. Manuel (Saisir un ID)"
         $diagChoice = Read-Host "`n  Choix (1-3)"
         
@@ -881,14 +1052,14 @@ function Run-LanguageDiagnostic {
     }
     
     $finalList = @($idsToProcess)
-    if ($finalList.Count -eq 0) { Write-Host "  [OK] Aucune vidéo à analyser." -ForegroundColor Gray; return }
-    Write-Host "  [SYSTEME] Analyse de $($finalList.Count) vidéos en cours (Parallel)..." -ForegroundColor Gray
+    if ($finalList.Count -eq 0) { Write-Host "  [OK] Aucune video a? analyser." -ForegroundColor Gray; return }
+    Write-Host "  [SYSTEME] Analyse de $($finalList.Count) videos en cours (Parallel)..." -ForegroundColor Gray
     
-    $finalList | ForEach-Object -Parallel {
+    $finalList | ForEach-Object {
         $id = $_
         $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        $YtDlp = $using:YtDlp
-        $BlacklistPath = $using:BlacklistPath
+        $YtDlp = $YtDlp
+        $BlacklistPath = $BlacklistPath
         
         try {
             $info = & $YtDlp --user-agent $userAgent --print "%(language)s|%(title)s" --no-warnings "https://www.youtube.com/watch?v=$id" 2>$null
@@ -896,11 +1067,11 @@ function Run-LanguageDiagnostic {
                 $parts = $info -split '\|'; $lang = $parts[0]; $title = $parts[1]
                 if ($lang -and !($lang.StartsWith("fr") -or $lang.StartsWith("en"))) {
                     Write-Host "      [REJECT] $id ($lang) - $title" -ForegroundColor Red
-                    "$id # [AUTO-LANG: $lang] $title" | Add-Content -LiteralPath $BlacklistPath -Encoding utf8
+                    "$id # [AUTO-LANG: $lang] $title" | Add-Content -LiteralPath $global:BlacklistPath -Encoding utf8
                 }
             }
         } catch { }
-    } -ThrottleLimit 4
+    }
 }
 
 # ==============================================================================
@@ -923,7 +1094,7 @@ function Run-ReSubtitling {
         if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     }
 
-    Write-StepHeader -Title "WORKFLOW RE-SUBTITLING (1FPS)" -Emoji "📽️"
+    Write-StepHeader -Title "WORKFLOW RE-SUBTITLING (1FPS)" -Emoji "????i??"
     
     Write-Host "  Utilisation d'un buffer local pour la blacklist..." -ForegroundColor Gray
     $localBuffer = Join-Path $env:TEMP "blacklist_industrial.tmp"
@@ -933,16 +1104,16 @@ function Run-ReSubtitling {
     Write-Host "  Chargement de la blacklist... (Patientez)" -ForegroundColor Gray
     $blContent = Get-SafeContent $localBuffer
     
-    Write-Host "  Quelles vidéos re-sous-titrer ?" -ForegroundColor White
-    Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Gray
+    Write-Host "  Quelles videos re-sous-titrer ?" -ForegroundColor White
+    Write-Host "  a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??" -ForegroundColor Gray
     Write-Host "  1. [SUB-MISSING] uniquement (Absence de ST)"
     Write-Host "  2. [SUB-KO]      uniquement (Mauvaise langue)"
-    Write-Host "  3. [TO-REVIEW]    uniquement (Vidéos à valeur ajoutée)"
-    Write-Host "  4. [FORCE]        uniquement (Forçage manuel)"
-    Write-Host "  5. [MANUAL-SKIP]  uniquement (Vidéos ignorées)"
-    Write-Host "  6. 💥 TOUT (Missing + KO + TO-REVIEW + FORCE + SKIP)"
-    Write-Host "  7. ⌨️ Manuel (Saisir un ID)"
-    Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Gray
+    Write-Host "  3. [TO-REVIEW]    uniquement (Videos a? valeur ajoutee)"
+    Write-Host "  4. [FORCE]        uniquement (Fora?age manuel)"
+    Write-Host "  5. [MANUAL-SKIP]  uniquement (Videos ignorees)"
+    Write-Host "  6. ???? TOUT (Missing + KO + TO-REVIEW + FORCE + SKIP)"
+    Write-Host "  7. a??i?? Manuel (Saisir un ID)"
+    Write-Host "  a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??" -ForegroundColor Gray
     $resubChoice = Read-Host "`n  Votre choix (1-7)"
     
     $filter = switch ($resubChoice) {
@@ -956,7 +1127,7 @@ function Run-ReSubtitling {
         default { return }
     }
 
-    Write-Host "  Analyse des entrées... (Patientez)" -ForegroundColor Gray
+    Write-Host "  Analyse des entrees... (Patientez)" -ForegroundColor Gray
     $idsToProcess = [System.Collections.Generic.List[PSObject]]::new()
     if ($filter -eq "MANUAL") {
         $manualId = Read-Host "  Saisir l'ID YouTube"
@@ -977,8 +1148,8 @@ function Run-ReSubtitling {
     if ($idsToProcess.Count -eq 0) { Write-Log "Aucune video correspondant aux criteres." "Green"; return }
 
     # Ajout d'une limite optionnelle pour eviter de saturer le systeme
-    Write-Host "  $($idsToProcess.Count) vidéos détectées." -ForegroundColor Yellow
-    Write-Host "  Combien de vidéos traiter dans cette session ? (Entrée pour TOUT)" -ForegroundColor White
+    Write-Host "  $($idsToProcess.Count) videos detectees." -ForegroundColor Yellow
+    Write-Host "  Combien de videos traiter dans cette session ? (Entree pour TOUT)" -ForegroundColor White
     $limit = Read-Host "  Limite"
     if ($limit -as [int]) { 
         $limitVal = [int]$limit
@@ -990,9 +1161,9 @@ function Run-ReSubtitling {
     $finalIds = @($idsToProcess)
     if ($finalIds.Count -eq 0) { Write-Log "Aucun ID final a traiter." "Yellow"; return }
 
-    Write-Host "`n  [DEMARRAGE] Traitement de $($finalIds.Count) vidéos..." -ForegroundColor Cyan
+    Write-Host "`n  [DEMARRAGE] Traitement de $($finalIds.Count) videos..." -ForegroundColor Cyan
     Write-Host "  Dossier Audio : $AudioDir" -ForegroundColor Gray
-    Write-Host "  Dossier Vidéo : $OutputDir" -ForegroundColor Gray
+    Write-Host "  Dossier Video : $OutputDir" -ForegroundColor Gray
     
     $success = 0; $failed = 0; $idx = 0; $batchIdx = 0
     
@@ -1021,13 +1192,13 @@ function Run-ReSubtitling {
             
             # Securite Reprise : Si le MP4 existe deja, on considere comme traite
             if (Test-Path -LiteralPath $videoPath) {
-                Write-Host "$prefix ✅ SKIP : $title [$id]" -ForegroundColor Green
+                Write-Host "$prefix a?? SKIP : $title [$id]" -ForegroundColor Green
                 $processedIds.Add($id)
                 if ($id -notmatch "MANUAL" -and $id -notin $toUpload) { $toUpload.Add($id) }
                 $success++; continue
             }
 
-            Write-Host "$prefix 📽️ PROCESS : $title [$id]" -ForegroundColor Cyan
+            Write-Host "$prefix ????i?? PROCESS : $title [$id]" -ForegroundColor Cyan
         
             # 1. Recuperation Audio (Local)
             if (Test-Path -LiteralPath $audioPath) {
@@ -1057,7 +1228,7 @@ function Run-ReSubtitling {
                 if ($id -notin $toUpload) { $toUpload.Add($id) }
             } else { 
                 $failed++ 
-                Write-Host "      [!] ECHEC : La video n'a pas pu être générée pour $id" -ForegroundColor Yellow
+                Write-Host "      [!] ECHEC : La video n'a pas pu a?tre generee pour $id" -ForegroundColor Yellow
             }
 
             Get-ChildItem -LiteralPath $localWork -Filter "$id*" | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -1092,8 +1263,8 @@ function Run-ReSubtitling {
     [System.IO.File]::WriteAllLines($uploadFile, $finalToUpload)
     
     $dur = Get-DurationStr $startTime
-    Write-Host "`n  [OK] Blacklist mise à jour (vidéos traitées supprimées)." -ForegroundColor Green
-    Write-Host "  [OK] Liste d'upload mise à jour : $($finalToUpload.Count) vidéos prêtes dans a_uploader.txt ($dur)" -ForegroundColor Cyan
+    Write-Host "`n  [OK] Blacklist mise a? jour (videos traitees supprimees)." -ForegroundColor Green
+    Write-Host "  [OK] Liste d'upload mise a? jour : $($finalToUpload.Count) videos pra?tes dans a_uploader.txt ($dur)" -ForegroundColor Cyan
 }
 
 # ==============================================================================
@@ -1121,13 +1292,13 @@ function Export-MasterInventory {
         }
     }
 
-    Write-Host "`n  Traitement parallélisé de $totalChans chaînes..." -ForegroundColor White
+    Write-Host "`n  Traitement parallelise de $totalChans chaa?nes..." -ForegroundColor White
     
     # Utilisation du parallelisme pour scanner les dossiers (Lecture intensive)
-    $inventory = $channels | ForEach-Object -Parallel {
+    $inventory = $channels | ForEach-Object {
         $chan = $_
-        $BaseDir = $using:BaseDir
-        $blMap = $using:blMap
+        $BaseDir = $BaseDir
+        $blMap = $blMap
         $logPrefix = $chan.Prefixe
         $channelResults = [System.Collections.Generic.List[PSObject]]::new()
         
@@ -1226,9 +1397,9 @@ function Export-MasterInventory {
         }
         Write-Host "." -NoNewline # Progress dot
         return $channelResults
-    } -ThrottleLimit 8
+    }
 
-    # Compilation des résultats
+    # Compilation des resultats
     $finalInventory = @()
     foreach ($res in $inventory) { if ($null -ne $res) { $finalInventory += $res } }
 
@@ -1243,27 +1414,34 @@ function Export-MasterInventory {
 }
 
 while ($true) {
-    Clear-Host
-    $headerLine = "══════════════════════════════════════════════════════════"
-    Write-Host "`n  ╔$headerLine╗" -ForegroundColor Magenta
-    Write-Host "  ║             INDUSTRIAL PIPELINE v13.5.8 UNIFIED          ║" -ForegroundColor White
-    Write-Host "  ╚$headerLine╝" -ForegroundColor Magenta
-    Write-Host "  1. ➕ Ajouter et traiter une chaîne (manuel)"
-    Write-Host "  2. 🔄 Rafraîchir toutes les chaînes (auto)"
-    Write-Host "  3. 🔁 Retenter uniquement les échecs (rapide)"
-    Write-Host "  4. 🌐 Lancer le diagnostic de langue (filtrage)"
-    Write-Host "  5. 📽️ Lancer le workflow de re-sous-titrage (1 fps)"
-    Write-Host "  6. 🛠️ Maintenance globale (nettoyage + diagnostic)"
-    Write-Host "  7. 📊 Générer l'inventaire global (fichier CSV)"
-    Write-Host "  8. ⚙️ Paramètres (cookies, délais, etc.)"
-    Write-Host "  0. 👋 Quitter"
-    Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Gray
+    try { Clear-Host } catch {}
+    Write-Header -Title "INDUSTRIAL PIPELINE v14.0.0 UNIFIED"
+    Write-Host "  1. [M] Ajouter et traiter une chaine (manuel)"
+    Write-Host "  2. [A] Rafraichir toutes les chaines (auto)"
+    Write-Host "  3. [R] Retenter uniquement les echecs (rapide)"
+    Write-Host "  4. [L] Lancer le diagnostic de langue (filtrage)"
+    Write-Host "  5. [S] Lancer le workflow de re-sous-titrage (1 fps)"
+    Write-Host "  6. [T] Maintenance globale (nettoyage + diagnostic)"
+    Write-Host "  7. [I] Generer l'inventaire global (fichier CSV)"
+    Write-Host "  8. [P] Parametres (cookies, delais, etc.)"
+    Write-Host "  0. [Q] Quitter"
+    Write-Host ("=" * 80) -ForegroundColor Cyan
     
-    $choice = ""
-    while ($choice -notmatch "^[0-8]$") {
-        Write-Host "  Votre choix: " -NoNewline -ForegroundColor Cyan
-        $choice = Read-Host
-        if ($choice -notmatch "^[0-8]$") { Write-Host "  [!] Choix invalide." -ForegroundColor Red }
+    if ($ChannelName) {
+        Write-Host ">>>> MODE DIRECT : Traitement de la chaine '$ChannelName'" -ForegroundColor Green
+        $choice = "2" 
+    } elseif ($AutoLoop) {
+        $choice = "2"
+    } elseif ($Action -eq "RefreshAll") {
+        Write-Host ">>>> ACTION : Rafraichissement de toutes les chaines" -ForegroundColor Green
+        $choice = "2"
+    } else {
+        $choice = ""
+        while ($choice -notmatch "^[0-8]$") {
+            Write-Host "  Votre choix: " -NoNewline -ForegroundColor Cyan
+            $choice = Read-Host
+            if ($choice -notmatch "^[0-8]$") { Write-Host "  [!] Choix invalide." -ForegroundColor Red }
+        }
     }
 
     if ($choice -eq "0") { break }
@@ -1272,10 +1450,10 @@ while ($true) {
     $channels = Import-Csv $ConfigPath -Delimiter ";"
     
     if ($choice -eq "8") {
-        Clear-Host
-        Write-Host "  ╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "  ║           PARAMETRES DU PIPELINE             ║" -ForegroundColor White
-        Write-Host "  ╚══════════════════════════════════════════════╝" -ForegroundColor Cyan
+        try { Clear-Host } catch {}
+        Write-Host "  a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??" -ForegroundColor Cyan
+        Write-Host "  a??           PARAMETRES DU PIPELINE             a??" -ForegroundColor White
+        Write-Host "  a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??" -ForegroundColor Cyan
         Write-Host "  1. Source des Cookies (Actuel: $($global:Settings.CookieSource))"
         Write-Host "  2. Limite de scan playlist (Actuel: $($global:Settings.MaxPlaylistEnd))"
         Write-Host "  0. Retour"
@@ -1294,7 +1472,12 @@ while ($true) {
     
     if ($choice -match "[123]") {
         $mode = $choice
-        $targets = if ($choice -eq "1") { 
+        Write-Host "  [DEBUG] $ConfigPath : $($channels.Count) chaines chargees." -ForegroundColor Cyan
+        if ($channels.Count -gt 0) {
+            $sample = $channels[0..4] | ForEach-Object { $_.Prefixe }
+            Write-Host "  [DEBUG] Echantillon Prefixes : $($sample -join ', ')" -ForegroundColor Gray
+        }
+        if ($choice -eq "1") { 
             $url = ""; while ($url -notmatch "youtube\.com") { $url = Read-Host "  URL de la chaine"; if ($url -notmatch "youtube\.com") { Write-Host "  [!] URL invalide." -ForegroundColor Red } }
             Write-Host "  [SYSTEME] Recuperation du nom de la chaine..." -ForegroundColor Gray
             $suggested = Get-YouTubeName $url
@@ -1309,14 +1492,28 @@ while ($true) {
                 $newChan | Export-Csv $ConfigPath -Delimiter ";" -Append -NoTypeInformation -Force
                 $channels = Import-Csv $ConfigPath -Delimiter ";" # Rechargement
             }
-            @($newChan)
-        } else { $channels }
+            $targets = @($newChan)
+        } else { 
+            if ($ChannelName) {
+                Write-Host "  [DEBUG] Debut du filtrage manuel..." -ForegroundColor Gray
+                $t = [System.Collections.Generic.List[PSObject]]::new()
+                foreach ($c in $channels) {
+                    if ($c.Prefixe.Trim() -eq $ChannelName.Trim()) {
+                        $t.Add($c)
+                    }
+                }
+                $targets = $t.ToArray()
+                Write-Host "  [DEBUG] Filtrage sur '$ChannelName' : $($targets.Count) trouve." -ForegroundColor Cyan
+            } else {
+                $targets = $channels 
+            }
+        }
 
         # 1. Nettoyage GLOBAL des verrous morts
         $startTime = Get-Date
         Write-Host "`n[SYSTEME] Audit des verrous de securite..." -ForegroundColor Gray
         foreach ($c in $channels) {
-            $lock = Join-Path $BaseDir $c.Prefixe "process.lock"
+            $lock = Join-Path (Join-Path $BaseDir $c.Prefixe) "process.lock"
             if (Test-Path $lock) {
                 $pidVal = Get-Content $lock -ErrorAction SilentlyContinue
                 if ($pidVal -and ($pidVal -ne $PID)) {
@@ -1325,7 +1522,7 @@ while ($true) {
                         if (Test-Path -LiteralPath $lock) {
                             Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
                         }
-                        Write-Host "  🔓 Verrou libere pour $($c.Prefixe)" -ForegroundColor Yellow
+                        Write-Host "  ???? Verrou libere pour $($c.Prefixe)" -ForegroundColor Yellow
                     }
                 }
             }
@@ -1337,73 +1534,151 @@ while ($true) {
             Clean-GlobalPacks -GlobalPacksDir $AllPacksDir -ValidPrefixes $validPrefixes | Out-Null
         }
         
+        $ReverseAll = $false
+        if ($choice -eq "2") {
+            if ($AutoLoop -or $ChannelName) {
+                if ($ReverseAll -eq "y") { $ReverseAll = $true } else { $ReverseAll = $false }
+            } else {
+                $revQ = Read-Host "  Voulez-vous synchroniser en partant de la FIN de la playlist ? (y/N)"
+                if ($revQ -eq "y") { $ReverseAll = $true; Write-Host "  [MODE] Synchronisation INVERSEE activee." -ForegroundColor Yellow }
+            }
+        }
+
         # Boucle de traitement principale
-        while ($targets.Count -gt 0) {
-            $chanIndex = 0
-            $totalChans = $targets.Count
-            $skippedChannels = [System.Collections.Generic.List[string]]::new()
+        Write-Host "  [DEBUG] Entree dans la boucle principale avec $($targets.Count) cibles." -ForegroundColor Cyan
+        # --- MODE PARALLELE ---
+        $functionNames = @("Sync-YouTube", "Process-LocalFiles", "Build-Packs", "Invoke-Sqlite", "Write-Log", "Ensure-ChannelDb", "Get-SafeContent", "Get-CleanTranscript", "Get-ChannelLock", "Get-YouTubeName", "Write-Log", "Write-StepHeader", "Write-SubStep", "Get-DurationStr")
+        $scriptFunctions = @{}
+        foreach ($f in $functionNames) { if (Get-Command $f -ErrorAction SilentlyContinue) { $scriptFunctions[$f] = (Get-Command $f).Definition } }
 
-            foreach ($chan in $targets) {
-                $chanIndex++
-                $folder = $chan.Prefixe 
-                $cDir = Join-Path $BaseDir $folder
-                if (!(Test-Path -LiteralPath $cDir)) { New-Item -ItemType Directory -Force -Path $cDir | Out-Null }
-                
-                if (!(Get-ChannelLock $cDir)) {
-                    Write-Host "  🔒 [BUSY] Skip: $($chan.Prefixe)" -ForegroundColor Yellow
-                    $skippedChannels.Add($chan.Prefixe)
-                    continue
-                }
-                
-                try {
-                    Write-Host "`n  ─── 📡 SYNC [$chanIndex/$totalChans] : $($chan.Prefixe) ───" -ForegroundColor Cyan
-                    
-                    $p1 = Join-Path $cDir "1_RAW"; $p2 = Join-Path $cDir "2_TXT"; $p3 = Join-Path $cDir "3_TXT_dense"; $p4 = Join-Path $cDir "4_Packs"
-                    foreach ($p in @($p1,$p2,$p3,$p4)) { if (!(Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null } }
+        $skippedChannels = [System.Collections.Generic.List[string]]::new()
+        
+        # Local copies for thread safety
+        $locSqlite = $global:Sqlite
+        $locYtDlp = $global:YtDlp
+        $locFfmpeg = $global:Ffmpeg
+        $locDbDir = $global:DbDir
+        $locConfigPath = $global:ConfigPath
+        $locBlacklistPath = $global:BlacklistPath
+        $locAllPacksDir = $global:AllPacksDir
+        $locLogsDir = $global:LogsDir
+        $locReSubDir = $global:ReSubDir
 
-                    $syncResult = Sync-YouTube -Url $chan.URL -RawDir $p1 -YtDlp $YtDlp -Ffmpeg $Ffmpeg -Cookies @() -Lang $chan.Lang -BaseDir $cDir -LogPrefix $chan.Prefixe -BlacklistPath $BlacklistPath -RetryOnly ($mode -eq "3")
-                    
-                    $newTxt = Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $chan.Lang -Prefix $chan.Prefixe
-                    $null = Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $chan.Prefixe -LogPrefix $chan.Prefixe -GlobalPacksDir $AllPacksDir
-                    
-                    $statusIcon = if ($syncResult.Missing -eq 0) { "✅" } else { "⏳" }
-                    Write-Host "`n  $statusIcon BILAN : " -NoNewline -ForegroundColor Green
-                    Write-Host "Playlist: $($syncResult.Playlist) " -NoNewline -ForegroundColor White
-                    Write-Host "| Local: $($syncResult.Local) " -NoNewline -ForegroundColor Green
-                    Write-Host "| Blacklist: $($syncResult.Ignored) " -NoNewline -ForegroundColor Gray
-                    Write-Host "| Manquantes: $($syncResult.Missing)" -ForegroundColor ($syncResult.Missing -gt 0 ? "Yellow" : "Gray")
-
-                } finally {
-                    $lockFile = Join-Path $cDir "process.lock"
-                    if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
-                }
+        $targets | ForEach-Object -Parallel {
+            $chan = $_
+            $allT = $using:targets
+            $sIdx = [array]::IndexOf($allT, $chan)
+            
+            # Staggered start (décalage aléatoire de 5 à 10s par thread)
+            if ($sIdx -gt 0) { 
+                $delay = Get-Random -Minimum 5 -Maximum 11
+                Start-Sleep -Seconds $delay 
             }
 
-            if ($skippedChannels.Count -gt 0) {
-                Write-Host "`n  ⚠️  ATTENTION : $($skippedChannels.Count) chaine(s) sautee(s) (Verrouillees) : " -ForegroundColor Yellow -NoNewline
-                Write-Host ($skippedChannels -join ", ") -ForegroundColor White
-                $retry = Read-Host "`n  [QUESTION] Voulez-vous retenter ces $($skippedChannels.Count) chaines maintenant ? (O/N)"
-                if ($retry -match "o|y|O|Y") {
-                    $targets = $channels | Where-Object { $skippedChannels -contains $_.Prefixe }
-                    $skippedChannels.Clear()
-                } else { break }
-            } else { break }
+            $funcs = $using:scriptFunctions
+            $modeVal = $using:mode
+            $sChannels = $using:skippedChannels
+            
+            # Re-importation des fonctions
+            foreach ($fName in $funcs.Keys) {
+                $def = $funcs[$fName]
+                New-Item -Path "function:global:$fName" -Value ([scriptblock]::Create($def)) -Force | Out-Null
+            }
+            
+            # Re-importation du contexte global
+            $global:BaseDir = $using:BaseDir
+            $global:YtDlp = $using:locYtDlp
+            $global:Ffmpeg = $using:locFfmpeg
+            $global:Sqlite = $using:locSqlite
+            $global:Settings = $using:Settings
+            $global:userAgent = $using:userAgent
+            $global:useCookies = $using:useCookies
+            $global:BlacklistPath = $using:locBlacklistPath
+            $global:LogsDir = $using:locLogsDir
+            $global:ConfigPath = $using:locConfigPath
+            $global:DbDir = $using:locDbDir
+            $global:AllPacksDir = $using:locAllPacksDir
+            $global:ReSubDir = $using:locReSubDir
+            
+            $folder = $chan.Prefixe 
+            $cDir = Join-Path $global:BaseDir $folder
+            if (!(Test-Path -LiteralPath $cDir)) { New-Item -ItemType Directory -Force -Path $cDir | Out-Null }
+            
+            if (!(Get-ChannelLock $cDir)) {
+                Write-Host "  [!] [BUSY] Skip (en cours ailleurs) : $($chan.Prefixe)" -ForegroundColor Yellow
+                $sChannels.Add($chan.Prefixe)
+                return
+            }
+            
+            try {
+                Write-Host "`n[PARALLEL] >>> SYNC : $($chan.Prefixe) <<<" -ForegroundColor Cyan
+                
+                # Securite URL (casse variable dans le CSV)
+                $targetUrl = $chan.URL
+                if (!$targetUrl) { $targetUrl = $chan.Url }
+                if (!$targetUrl) { $targetUrl = $chan.url }
+                
+                if (!$targetUrl) {
+                    Write-Host "  [ERREUR] URL manquante pour $($chan.Prefixe). Verifiez channels_config.csv." -ForegroundColor Red
+                    return
+                }
+
+                $p1 = Join-Path $cDir "1_RAW"; $p2 = Join-Path $cDir "2_TXT"; $p3 = Join-Path $cDir "3_TXT_dense"; $p4 = Join-Path $cDir "4_Packs"
+                foreach ($p in @($p1,$p2,$p3,$p4)) { if (!(Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null } }
+
+                $syncResult = Sync-YouTube -Url $targetUrl -LogPrefix $chan.Prefixe -Lang $chan.Langue -RetryOnly ($modeVal -eq "3") -Reverse $using:ReverseAll
+                
+                $newTxt = Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $chan.Langue -Prefix $chan.Prefixe
+                $null = Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $chan.Prefixe -LogPrefix $chan.Prefixe -GlobalPacksDir $global:AllPacksDir
+                
+                $statusIcon = if ($syncResult.Missing -eq 0) { "[OK]" } else { "[...]" }
+                Write-Host "`n  $statusIcon BILAN [$($chan.Prefixe)] : " -NoNewline -ForegroundColor Green
+                Write-Host "Playlist: $($syncResult.Playlist) " -NoNewline -ForegroundColor White
+                Write-Host "| Local: $($syncResult.Local) " -NoNewline -ForegroundColor Green
+                Write-Host "| Blacklist: $($syncResult.Ignored) " -NoNewline -ForegroundColor Gray
+                
+                $missColor = if ($syncResult.Missing -gt 0) { "Yellow" } else { "Gray" }
+                Write-Host "| Manquantes: $($syncResult.Missing)" -ForegroundColor $missColor
+
+            } catch {
+                Write-Host "  [ERREUR] $($chan.Prefixe) : $($_.Exception.Message)" -ForegroundColor Red
+            } finally {
+                $lockFile = Join-Path $cDir "process.lock"
+                if (Test-Path -LiteralPath $lockFile) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
+            }
+        } -ThrottleLimit 8
+
+        if ($skippedChannels.Count -gt 0) {
+            Write-Host "`n  [!] $($skippedChannels.Count) chaine(s) verouillee(s) ont ete sautees." -ForegroundColor Yellow
         }
-        Write-Host "`n[FIN] Traitement terminé en $(Get-DurationStr $startTime)" -ForegroundColor Cyan
+        $durationStr = Get-DurationStr $startTime
+        Write-Host "`n[FIN] Traitement termine en $durationStr" -ForegroundColor Cyan
+            
+        if ($AutoLoop) {
+            Write-Host "`n  [AUTO] Mise a jour du Dashboard et Rapport de sante..." -ForegroundColor Cyan
+            & pwsh -File Audit-DataHealth.ps1 | Out-Null
+            & pwsh -File Sync-Dashboard.ps1 | Out-Null
+            Write-Host "  [AUTO] Attente de 30 minutes avant le prochain cycle..." -ForegroundColor Gray
+            Start-Sleep -Seconds 1800
+            continue
+        }
+            
+        if ($Action) { break } # Quitter si on est en mode ligne de commande simple
+        $null = [Console]::ReadKey()
     }
     elseif ($choice -eq "4") {
         $startTime = Get-Date
         Run-LanguageDiagnostic
-        Write-Host "`n[SUCCES] Diagnostic de langue terminé ($(Get-DurationStr $startTime))." -ForegroundColor Green
+        Write-Host "`n[SUCCES] Diagnostic de langue termine ($(Get-DurationStr $startTime))." -ForegroundColor Green
     }
     elseif ($choice -eq "5") { Run-ReSubtitling }
     elseif ($choice -eq "6") {
         $startTime = Get-Date
-        Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "  ║             Maintenance globale du pipeline              ║" -ForegroundColor White
-        Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host "  a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??" -ForegroundColor Cyan
+        Write-Host "  a??             Maintenance globale du pipeline              a??" -ForegroundColor White
+        Write-Host "  a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??a??" -ForegroundColor Cyan
         
-        $mMode = Read-Host "`n  Mode de travail : (1) TOUTES les chaînes | (2) Une chaîne spécifique [Défaut: 1]"
+        $mMode = Read-Host "`n  Mode de travail : (1) TOUTES les chaa?nes | (2) Une chaa?ne specifique [Defaut: 1]"
         if ($mMode -eq "2") {
             Write-Host "`n  --- SELECTION DE LA CHAINE ---" -ForegroundColor Cyan
             for ($i=0; $i -lt $channels.Count; $i++) {
@@ -1419,35 +1694,35 @@ while ($true) {
         $steps = @("Migration", "Integrite", "Doublons", "Packs", "Langues", "ManualSkip", "Verification")
         $totalSteps = $steps.Count
 
-        $doMigration = (Read-Host "  [1/$totalSteps] Lancer la migration ? [O/N] (Défaut: N)").ToUpper() -eq "O"
-        $doIntegrity = (Read-Host "  [2/$totalSteps] Lancer le diagnostic d'intégrité ? [O/N] (Défaut: O)").ToUpper() -ne "N"
-        $doDoublons  = (Read-Host "  [3/$totalSteps] Lancer le nettoyage des doublons ? [O/N] (Défaut: O)").ToUpper() -ne "N"
-        $doPacks     = (Read-Host "  [4/$totalSteps] Lancer la reconstruction des packs ? [O/N] (Défaut: O)").ToUpper() -ne "N"
-        $doLangues   = (Read-Host "  [5/$totalSteps] Lancer le filtrage des langues ? [O/N] (Défaut: N)").ToUpper() -eq "O"
-        $doManual    = (Read-Host "  [6/$totalSteps] Débloquer les [MANUAL-SKIP] ? [O/N] (Défaut: N)").ToUpper() -eq "O"
-        $doReview    = (Read-Host "  [7/$totalSteps] Lancer la vérification finale des packs ? [O/N] (Défaut: O)").ToUpper() -ne "N"
+        $doMigration = (Read-Host "  [1/$totalSteps] Lancer la migration ? [O/N] (Defaut: N)").ToUpper() -eq "O"
+        $doIntegrity = (Read-Host "  [2/$totalSteps] Lancer le diagnostic d'integrite ? [O/N] (Defaut: O)").ToUpper() -ne "N"
+        $doDoublons  = (Read-Host "  [3/$totalSteps] Lancer le nettoyage des doublons ? [O/N] (Defaut: O)").ToUpper() -ne "N"
+        $doPacks     = (Read-Host "  [4/$totalSteps] Lancer la reconstruction des packs ? [O/N] (Defaut: O)").ToUpper() -ne "N"
+        $doLangues   = (Read-Host "  [5/$totalSteps] Lancer le filtrage des langues ? [O/N] (Defaut: N)").ToUpper() -eq "O"
+        $doManual    = (Read-Host "  [6/$totalSteps] Debloquer les [MANUAL-SKIP] ? [O/N] (Defaut: N)").ToUpper() -eq "O"
+        $doReview    = (Read-Host "  [7/$totalSteps] Lancer la verification finale des packs ? [O/N] (Defaut: O)").ToUpper() -ne "N"
 
         # Etape 1: Migration
         if ($doMigration) {
-            Write-StepHeader -Title "Migration et Nomenclature" -StepNum 1 -TotalSteps $totalSteps -Emoji "🚚"
+            Write-StepHeader -Title "Migration et Nomenclature" -StepNum 1 -TotalSteps $totalSteps -Emoji "[M]"
             $migrated = Maintenance-Migration -channels $channels
             if ($migrated) { $channels = Import-Csv $ConfigPath -Delimiter ";" }
         }
         
-        # Etape 2: Diagnostic d'Intégrité
+        # Etape 2: Diagnostic d'Integrite
         if ($doIntegrity) {
-            Write-StepHeader -Title "Diagnostic d'Intégrité" -StepNum 2 -TotalSteps $totalSteps -Emoji "🔍"
+            Write-StepHeader -Title "Diagnostic d'Integrite" -StepNum 2 -TotalSteps $totalSteps -Emoji "[D]"
             $cIdx = 0; $cTotal = $channels.Count
             foreach ($c in $channels) {
                 $cIdx++
                 $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
                 if (Test-Path -LiteralPath $cDir) {
-                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "🔍"
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "????"
                     $diag = Repair-Packs -BaseDir $cDir -Prefix $c.Prefixe
                     if ($diag.NeedDownload) {
                         Write-Host "      [AUTO-HEAL] Re-telechargement..." -ForegroundColor Cyan
                         $p1 = Join-Path $cDir "1_RAW"
-                        $null = Sync-YouTube -Url $c.URL -RawDir $p1 -YtDlp $YtDlp -Ffmpeg $Ffmpeg -Cookies @() -Lang $c.Lang -BaseDir $cDir -LogPrefix $c.Prefixe -BlacklistPath $BlacklistPath -RetryOnly $true
+                        $null = Sync-YouTube -Url $c.URL -LogPrefix $c.Prefixe -Lang $c.Langue -RetryOnly $true
                     }
                 }
             }
@@ -1455,70 +1730,70 @@ while ($true) {
 
         # Etape 3: Nettoyage des Doublons
         if ($doDoublons) {
-            Write-StepHeader -Title "Nettoyage des Doublons" -StepNum 3 -TotalSteps $totalSteps -Emoji "👯"
+            Write-StepHeader -Title "Nettoyage des Doublons" -StepNum 3 -TotalSteps $totalSteps -Emoji "[X]"
             $cIdx = 0; $cTotal = $channels.Count
             foreach ($c in $channels) {
                 $cIdx++
                 $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
                 if (Test-Path -LiteralPath $cDir) {
                     $count = Maintenance-Doublons -chanDir $cDir -prefix $c.Prefixe
-                    $status = if ($count -gt 0) { "NETTOYÉ ($count)" } else { "OK (Aucun)" }
-                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "👯" -Status $status
+                    $status = if ($count -gt 0) { "NETTOYa? ($count)" } else { "OK (Aucun)" }
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "????" -Status $status
                 }
             }
         }
         
         # Etape 4: Reconstruction des Packs
         if ($doPacks) {
-            Write-StepHeader -Title "Reconstruction des Packs" -StepNum 4 -TotalSteps $totalSteps -Emoji "📦"
+            Write-StepHeader -Title "Reconstruction des Packs" -StepNum 4 -TotalSteps $totalSteps -Emoji "[P]"
             $cIdx = 0; $cTotal = $channels.Count
             foreach ($c in $channels) {
                 $cIdx++
                 $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
                 if (Test-Path -LiteralPath $cDir) {
                     $p1 = Join-Path $cDir "1_RAW"; $p2 = Join-Path $cDir "2_TXT"; $p3 = Join-Path $cDir "3_TXT_dense"; $p4 = Join-Path $cDir "4_Packs"
-                    $null = Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $c.Lang -Prefix $c.Prefixe
+                    $null = Process-LocalFiles -RawDir $p1 -TxtDir $p2 -DenseDir $p3 -Lang $c.Langue -Prefix $c.Prefixe
                     $packCount = Build-Packs -DenseDir $p3 -PacksDir $p4 -Prefix $c.Prefixe -LogPrefix $c.Prefixe -GlobalPacksDir $AllPacksDir
-                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "📦" -Status "OK ($packCount packs)"
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "????" -Status "OK ($packCount packs)"
                 }
             }
         }
 
         # Etape 5: Diagnostic de Langue
         if ($doLangues) {
-            Write-StepHeader -Title "Filtrage des Langues" -StepNum 5 -TotalSteps $totalSteps -Emoji "🧪"
+            Write-StepHeader -Title "Filtrage des Langues" -StepNum 5 -TotalSteps $totalSteps -Emoji "[L]"
             $cIdx = 0; $cTotal = $channels.Count
             foreach ($c in $channels) {
                 $cIdx++
                 $folder = $c.Prefixe; $cDir = Join-Path $BaseDir $folder
                 if (Test-Path -LiteralPath $cDir) {
-                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "🧪"
+                    Write-SubStep -Title "Analyse : $($c.Prefixe)" -StepNum $cIdx -TotalSteps $cTotal -Emoji "????"
                     Run-LanguageDiagnostic -SpecificChannelDir $cDir
                 }
             }
         }
         
-        # Etape 6: Déblocage ManualSkip
+        # Etape 6: Deblocage ManualSkip
         if ($doManual) {
-            Write-StepHeader -Title "Déblocage [MANUAL-SKIP]" -StepNum 6 -TotalSteps $totalSteps -Emoji "🔓"
+            Write-StepHeader -Title "Deblocage [MANUAL-SKIP]" -StepNum 6 -TotalSteps $totalSteps -Emoji "[U]"
             if (Test-Path $BlacklistPath) {
                 $bl = Get-Content $BlacklistPath
                 $toRemove = $bl | Where-Object { $_ -match "\[MANUAL-SKIP\]" }
                 if ($toRemove.Count -gt 0) {
-                    Write-Host "  [!] $($toRemove.Count) vidéos Manual-Skip détectées." -ForegroundColor Yellow
+                    Write-Host "  [!] $($toRemove.Count) videos Manual-Skip detectees." -ForegroundColor Yellow
                     foreach ($line in $toRemove) { Write-Host "      > $line" -ForegroundColor Gray }
                     $newBL = $bl | Where-Object { $_ -notmatch "\[MANUAL-SKIP\]" }
                     $newBL | Out-File $BlacklistPath -Encoding utf8
-                    Write-Host "  [OK] $($toRemove.Count) vidéos débloquées de la blacklist." -ForegroundColor Green
+                    Write-Host "  [OK] $($toRemove.Count) videos debloquees de la blacklist." -ForegroundColor Green
                 } else {
-                    Write-Host "  [OK] Aucune vidéo [MANUAL-SKIP] trouvée." -ForegroundColor Gray
+                    Write-Host "  [OK] Aucune video [MANUAL-SKIP] trouvee." -ForegroundColor Gray
                 }
             }
         }
         
         # Etape 7: Verification Finale
         if ($doReview) {
-            Write-StepHeader -Title "Bilan et Verification des Packs" -StepNum 7 -TotalSteps $totalSteps -Emoji "📊"
+            Write-StepHeader -Title "Bilan et Verification des Packs" -StepNum 7 -TotalSteps $totalSteps -Emoji "[B]"
             Review-GlobalPacks -GlobalPacksDir $AllPacksDir
         }
 
@@ -1528,7 +1803,12 @@ while ($true) {
     elseif ($choice -eq "7") { Export-MasterInventory }
     
     if ($choice -ne "0") {
-        Write-Host "`nAppuyez sur une touche pour continuer..."
-        $null = [Console]::ReadKey()
+        if ($ChannelName) { exit }
+        if (!($ChannelName -or $Action)) {
+            Write-Host "`nAppuyez sur une touche pour continuer..."
+            $null = [Console]::ReadKey()
+        } else {
+            break
+        }
     }
 }

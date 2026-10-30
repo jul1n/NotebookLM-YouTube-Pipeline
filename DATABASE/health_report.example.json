@@ -1,0 +1,13 @@
+{
+  "total_videos": 0,
+  "downloaded": 0,
+  "pending": 0,
+  "failed": 0,
+  "channels": {
+    "Example Channel": {
+      "total": 0,
+      "success": 0,
+      "failed": 0
+    }
+  }
+}

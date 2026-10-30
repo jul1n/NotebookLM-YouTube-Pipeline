@@ -1,35 +1,23 @@
-# 📺 Industrial YouTube Transcription Pipeline v13.2.1
+# NotebookLM YouTube Pipeline
 
-Ecosystème complet pour la récupération, le filtrage et la préparation massive de données YouTube pour **NotebookLM**.
+Pipeline Windows de découverte YouTube, récupération des sous-titres, transcription audio optionnelle et export de packs pour NotebookLM.
 
-## 🚀 Fonctionnalités Principales (v13.2.1)
+Le moteur Python conserve les entrées du menu PowerShell v15, SQLite et le dashboard local. Les médias et archives restent sur Google Drive. La base active et un cache temporaire peuvent être placés en local dans un budget partagé de **10 Go**, après copie vérifiée.
 
-- **High-Performance Staging** : Utilise `%TEMP%` pour le traitement local (évite les verrous Google Drive).
-- **Safe I/O** : Accès sécurisé aux fichiers partagés via lecture partagée.
-- **Workflow de Re-sous-titrage** : Génération de vidéos statiques 1fps pour forcer les sous-titres manquants.
-- **Maintenance Ciblée** : Possibilité de réparer une seule chaîne spécifique.
-- **Parallel Processing** : Traitement multi-threadé pour le nettoyage du texte et la génération des packs.
-- **UI/UX Refinement** : Interface épurée avec compteurs de progression [X/Total].
+Lire [le guide stockage et pipeline](STORAGE_AND_PIPELINE.md) avant la migration ou un nettoyage. Il détaille les commandes, les sauvegardes, les reprises après erreur et les limites du budget local.
 
-## 🛠 L'Outil Central
+## Démarrage
 
-### `Industrial_Pipeline_v13.ps1` (v13.2.1)
-Le chef d'orchestre qui gère tout le workflow, de la détection sur YouTube à la génération des packs finaux dans `ALL_PACKS`.
+Prérequis : Python 3.10+, PowerShell 7, yt-dlp et FFmpeg dans `RESOURCES/BIN`, sqlite3.exe pour les outils PowerShell du dashboard et une base existante `DATABASE/PIPELINE_V15.db`. Les transcriptions audio sont différées : le menu propose une liste de suivi des vidéos sans sous-titres exploitables.
 
-- **Options 1-3** : Synchronisation (Manuelle, Auto, Rapide).
-- **Option 4** : Diagnostic global de LANGUE (Filtre le Hindi, Espagnol, etc.).
-- **Option 5** : Workflow RE-SUBTITLING (Vidéos 1fps pour forcer les sous-titres).
-- **Option 6** : Maintenance CIBLEE / GLOBALE (Migration, Intégrité, Doublons, Packs).
-- **Option 7** : Inventaire Global (CSV).
+```powershell
+pwsh -NoProfile -File MASTER-COMMANDER-v15.ps1
+```
 
-## 📦 Installation & Configuration
+Les cookies, bases, médias, configuration personnelle et chemins propres à la machine ne doivent pas être envoyés sur GitHub.
 
-1. **Pré-requis** : PowerShell 7+, `yt-dlp.exe` et `ffmpeg.exe` dans le dossier `BIN/`.
-2. **Configuration** : Editez `channels_config.csv` pour ajouter vos chaînes et préfixes.
-3. **Blacklist** : Le fichier `blacklist.txt` sert de mémoire centrale pour les vidéos à ignorer ou à retraiter.
+## Tests hors ligne
 
-## 🔒 Confidentialité
-Le projet est configuré avec un `.gitignore` strict pour ne jamais uploader vos cookies, vos configurations de chaînes privées ou les données brutes sur GitHub.
-
----
-*Développé pour une intégration fluide avec Google NotebookLM.*
+```powershell
+python -m unittest discover -s SCRIPTS -p "test_*.py" -v
+```

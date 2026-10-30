@@ -1,0 +1,13 @@
+{
+  "execution": "manual_only",
+  "verified_backup_retention": 3,
+  "media_deletion_requires_batch_approval": true,
+  "durable_artifacts": [
+    "transcript",
+    "compressed_timestamped_captions",
+    "provenance"
+  ],
+  "local_budget_bytes": 10000000000,
+  "github_target_branch": "main",
+  "audio_transcription_mode": "deferred"
+}

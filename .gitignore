@@ -1,53 +1,46 @@
-# Industrial YouTube Transcription Pipeline - Ignore Patterns
-
-# Binaries and Executables
-BIN/
-*.exe
-*.dll
-
-# Personal Configuration and Privacy (CRITICAL)
-channels_config.csv
-cookies.txt
-cookie.txt
-*.cookie
-*.cookies
-
-# Operational Logs and Working Directories
+# Pipeline v15 Gitignore
+OLD/
+WORKING_ZONE/_TEMP/
+WORKING_ZONE/_UPLOAD_FOR_SUBS/
 _LOGS/
-_RE_SUBTITLING_WORK/
-_RE_SUBTITLING_WORK_TEST/
-_BACKUP_ANCIEN_SYSTEME/
-DATA_STORES/
-pipeline_operations.log
+RESOURCES/cookie.txt
+RESOURCES/cookies.txt
+*.vtt
+*.srt
+*.mp4
+*.m4a
+*.json.tmp
+DATABASE/*.db
+DATABASE/sync_history_log.csv
+DATABASE/fetch_results.csv
+assets/transcripts/
+assets/data.js
+assets/health.js
+assets/stats.js
+CHANNELS_DATA/
+RESOURCES/
+PIPELINE_V15.db
+*.txt
+
+# Personal configuration and data files
+DATABASE/channels_config.csv
+DATABASE/health_report.json
 scratch/
-backups/
-ALL_PACKS/
-*.lock
 
-# Inventory and Personal Lists
-blacklist.txt
-a_uploader.txt
-MASTER_INVENTORY_*.csv
-MASTER_INVENTORY.csv
+# Local runtime / generated artifacts
+DATABASE/local-runtime.json
+DATABASE/snapshots/
+DATABASE/storage_report.json
+**/__pycache__/
+WORKING_ZONE/_CAPTIONS_GZ/
+assets/packs/
+assets/packs-previous-*/
+assets/packs-build-*/
 
-# Legacy / Obsolete Scripts
-pipeline_v8.ps1
-pipeline_v9.ps1
-re_subtitler.ps1
-check_languages.ps1
-"pipeline_v8 - marche bien avec Firefox.ps1"
+# Private pilot results and generated sample packs
+DATABASE/pilot_reports/
+assets/pilot-packs/
 
-# Channel-specific Data (Ignore all processing folders)
-**/1_RAW/
-**/2_TXT/
-**/3_TXT_dense/
-**/4_Packs/
-**/01_RAW/
-**/youtube_master_list.txt
-**/master_list.json
-**/missing_videos.txt
-**/archive.txt
-**/temp_cookies.txt
-**/process.lock
-**/re_subtitler.ps1
-**/check_languages.ps1
+# Personal channel selections remain local
+DATABASE/oussama_config.csv
+DATABASE/oussama_standalone.csv
