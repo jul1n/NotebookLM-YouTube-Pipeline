@@ -22,7 +22,7 @@ from contextlib import contextmanager
 GIB = 1024 ** 3
 BUDGET_BYTES = 10_000_000_000
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
-CAPTION_VERSION = "timed-overlap-v1"
+CAPTION_VERSION = "timed-overlap-v2"
 
 
 @contextmanager
@@ -41,6 +41,18 @@ def video_id(name):
     return match[1] if match else None
 
 
+def strip_caption_markup(text):
+    """Strip known caption markup, preserving literal comparisons such as <ami>."""
+    timestamp = r'<(?:\d+:)?\d{2}:\d{2}[.,]\d{3}>'
+    tags = r'</?(?:c(?:\.[\w.-]+)*|v|lang|b|i|u|ruby|rt|font|span)(?:\s[^<>]*)?>'
+    for _ in range(3):
+        text=html.unescape(text)
+        text=re.sub(r'</?(?:br|p|div)\b[^>]*>', ' ', text, flags=re.I)
+        text=re.sub(timestamp,'',text)
+        text=re.sub(tags,'',text,flags=re.I)
+    return text
+
+
 def clean_captions(raw):
     """Remove only rolling overlap between cues whose timestamps overlap."""
     output, previous, previous_end = [], [], -1
@@ -54,7 +66,7 @@ def clean_captions(raw):
             continue
         start, end = [int(h or 0)*3600 + int(m)*60 + int(s) + int(ms)/1000
                       for h, m, s, ms in matches]
-        words = html.unescape(re.sub(r"<[^>]+>", "", " ".join(lines[index+1:]))).split()
+        words = strip_caption_markup(" ".join(lines[index+1:])).split()
         overlap = 0
         if start < previous_end:
             for n in range(min(len(previous), len(words)), 0, -1):
@@ -223,8 +235,8 @@ def caption_inventory(runtime):
         for name in files:
             match = re.search(r'\.([a-z]{2}(?:-[A-Za-z0-9]+)?)\.(vtt|srt)(\.gz)?$', name)
             ident = video_id(name)
-            if match and ident:
-                index.setdefault((ident, match[1]), []).append(Path(folder)/name)
+            if ident and re.search(r'\.(vtt|srt)(\.gz)?$',name,re.I):
+                index.setdefault((ident, match[1] if match else 'und'), []).append(Path(folder)/name)
     return index
 
 
@@ -744,6 +756,26 @@ def purge(runtime, file):
         previous = saved.execute("SELECT transcript FROM videos WHERE youtube_id=?", (ident,)).fetchone()
         if not current or not previous or not current[0] or current[0] != previous[0]:
             raise ValueError("La sauvegarde ne contient pas la transcription active à l'identique")
+        raw_digest=None
+        if runtime.policy.get('deletion_requires_reprocessable_source',False):
+            metadata_exists=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pipeline_transcripts'").fetchone()
+            metadata=db.execute('SELECT raw_path,sha256 FROM pipeline_transcripts WHERE youtube_id=?',(ident,)).fetchone() if metadata_exists else None
+            if not metadata or not metadata[0]:raise ValueError('Source horodatée et provenance non vérifiées : média conservé')
+            source=Path(metadata[0])
+            if not source.is_file() or not source.name.lower().endswith(('.vtt','.srt','.vtt.gz','.srt.gz')):
+                raise ValueError('Source VTT/SRT retraitable introuvable : média conservé')
+            payload=source.read_bytes()
+            raw=gzip.decompress(payload) if source.suffix=='.gz' else payload
+            raw_digest=hashlib.sha256(raw).hexdigest()
+            if raw_digest!=metadata[1] or not clean_captions(raw.decode('utf-8-sig')):
+                raise ValueError('Source horodatée invalide ou empreinte différente : média conservé')
+        if runtime.policy.get('deletion_requires_quality_review',False):
+            receipt_path=runtime.database_dir/'quality_approvals'/f'{ident}.json'
+            if not receipt_path.is_file():raise ValueError('Validation humaine de la qualité manquante : média conservé')
+            receipt=json.loads(receipt_path.read_text(encoding='utf-8-sig'))
+            if (receipt.get('approved_by_user') is not True or receipt.get('transcript_sha256')!=hashlib.sha256(current[0].encode('utf-8')).hexdigest()
+                    or (raw_digest and receipt.get('raw_sha256')!=raw_digest)):
+                raise ValueError('La validation qualité ne correspond plus aux données actives : média conservé')
     # Reject changed media since inventory without reading/hydrating its contents.
     current_stat = resolved.stat()
     if current_stat.st_size != candidate.get("SizeBytes") or current_stat.st_mtime_ns != candidate.get("ModifiedNs"):

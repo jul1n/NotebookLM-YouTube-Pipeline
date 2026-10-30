@@ -97,3 +97,17 @@ Les tests utilisent uniquement des bases temporaires et des médias synthétique
 - Publication des commits : directement sur `main`, sans forcer l'historique.
 
 Ces règles sont matérialisées par `pipeline_policy.json`. Le budget local de 10 Go reste inchangé.
+
+## Qualité et retraitement sans YouTube
+
+```powershell
+python SCRIPTS/caption_quality.py --samples 6
+# Ou une chaîne seulement :
+python SCRIPTS/caption_quality.py --channel "Marc Lou" --samples 3
+```
+
+Le contrôle lit les transcriptions sans modifier la base et produit un rapport privé sous `DATABASE/pilot_reports`. Il repère horodatages, balises VTT et répétitions suspectes. Les répétitions naturelles ne sont pas supprimées automatiquement. « Aucune alerte » signifie seulement qu'aucune règle de détection n'a réagi.
+
+Des fichiers `before.txt` et `after.txt` permettent une lecture rapide. Quand un VTT/SRT est retrouvé, le candidat est régénéré depuis cette source ; le brut compressé, son empreinte et la version du nettoyeur sont conservés. Si aucune source horodatée n'est retrouvée, le candidat enlève seulement les balises reconnues du texte existant, sans tenter de dédupliquer le discours. Ce cas reste à revoir et ne justifie pas de supprimer les anciennes données.
+
+La règle de conservation est donc : une source horodatée exploitable et vérifiée, sa provenance et un texte validé. Les anciennes versions TXT et packs sont des dérivés régénérables. Aucune purge ne doit reposer sur la seule présence d'un texte en base : source retraitable et contrôle qualité sont également nécessaires, puis accord explicite sur le lot.

@@ -1,0 +1,167 @@
+"""Offline diagnostics and review copies. Never updates production transcripts."""
+import argparse
+from collections import Counter
+import difflib
+import gzip
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+import time
+
+import pipeline_core as core
+
+
+MARKERS = {
+    'inline_timestamp': re.compile(r'(?:<|&lt;|&amp;lt;|&#60;)(?:\d+:)?\d{2}:\d{2}[.,]\d{3}(?:>|&gt;|&amp;gt;|&#62;)'),
+    'cue_timing': re.compile(r'\b(?:\d{2,}:)?\d{2}:\d{2}[.,]\d{3}\s*-->'),
+    'orphan_timecode': re.compile(r'(?<!\w)\d{2,}:\d{2}:\d{2}[.,]\d{3}(?!\d)'),
+    'cue_tag': re.compile(r'(?:<|&lt;|&amp;lt;)/?(?:c(?:\.[\w.-]+)*|v|lang|ruby|rt)(?:\s[^<>]*?)?(?:>|&gt;|&amp;gt;)',re.I),
+    'cue_settings': re.compile(r'\b(?:align|position|line|size|vertical):(?:start|middle|end|center|left|right|rl|lr|\d+(?:\.\d+)?%?)\b',re.I),
+    'vtt_header': re.compile(r'\bWEBVTT\b|(?:^|\n)(?:Kind:\s*captions|Language:\s*[a-z]{2})',re.I),
+}
+TOKEN = re.compile(r"\b[\w’'-]+\b")
+
+
+def context(text, start, end, radius=100):
+    return text[max(0,start-radius):min(len(text),end+radius)]
+
+
+def inspect_text(text):
+    counts={};examples=[]
+    for name,pattern in MARKERS.items():
+        matches=list(pattern.finditer(text))
+        if matches:
+            counts[name]=len(matches)
+            examples.extend(dict(kind=name,excerpt=context(text,m.start(),m.end())) for m in matches[:2])
+    # Bounded token comparisons avoid pathological regex backtracking on long
+    # transcripts, and do not mistake repeated VTT markup for spoken words.
+    visible=core.strip_caption_markup(text)
+    tokens=list(TOKEN.finditer(visible));words=[t[0].casefold() for t in tokens]
+    repetition_count=0;example_counts=Counter();i=0
+    while i<len(words):
+        width=0;kind='repeated_phrase'
+        for size in range(min(12,(len(words)-i)//2),2,-1):
+            if words[i:i+size]==words[i+size:i+2*size]:width=2*size;break
+        if not width and i+6<=len(words) and words[i:i+2]==words[i+2:i+4]==words[i+4:i+6]:
+            width=6;kind='repeated_pair'
+        if not width and i+4<=len(words) and len(words[i])>=2 and len(set(words[i:i+4]))==1:
+            width=4;kind='repeated_word'
+        if width:
+            repetition_count+=1
+            if example_counts[kind]<2:
+                examples.append(dict(kind=kind,excerpt=context(visible,tokens[i].start(),tokens[i+width-1].end())))
+                example_counts[kind]+=1
+            i+=width
+        else:i+=1
+    status='technical_issue' if counts else 'repetition_review' if repetition_count else 'no_heuristic_alert'
+    return dict(status=status,technical_markers=counts,suspected_repetitions=repetition_count,examples=examples)
+
+
+def review_source(index,ident,languages):
+    for lang in languages:
+        for path in index.get((ident,lang),[]):
+            try:
+                payload=path.read_bytes()
+                original=gzip.decompress(payload) if path.suffix=='.gz' else payload
+                raw=original.decode('utf-8-sig')
+                candidate=core.clean_captions(raw)
+                if candidate:
+                    return dict(language=lang,path=str(path),original=original,candidate=candidate,
+                                extension='srt' if '.srt' in path.suffixes else 'vtt')
+            except (OSError,UnicodeError,EOFError):
+                continue
+    return None
+
+
+def compare_snippets(before,after):
+    words_before=before.split();words_after=after.split();changes=[]
+    matcher=difflib.SequenceMatcher(None,words_before,words_after,autojunk=True)
+    for tag,i,j,a,b in matcher.get_opcodes():
+        if tag=='equal':continue
+        changes.append(dict(operation=tag,before=' '.join(words_before[max(0,i-8):min(len(words_before),j+8)])[:800],
+                            after=' '.join(words_after[max(0,a-8):min(len(words_after),b+8)])[:800]))
+        if len(changes)>=4:break
+    return changes
+
+
+def audit_quality(runtime,channel=None,sample_limit=6):
+    if not 0<=sample_limit<=20:raise ValueError('Choisir entre 0 et 20 exemples retraités')
+    target=runtime.database_dir/'pilot_reports'/('quality-'+str(time.time_ns()))
+    target.mkdir(parents=True)
+    counts=Counter();marker_counts=Counter();flagged=[];total=0
+    query='''SELECT v.youtube_id,v.title,v.transcript,v.status,c.prefix AS channel,c.lang_config
+    FROM videos v JOIN channels c ON c.id=v.channel_id WHERE trim(COALESCE(v.transcript,''))!='' '''
+    with core.closing_database(core.connect(runtime.db,True)) as db:
+        rows=db.execute(query+(' AND c.prefix=?' if channel else '')+' ORDER BY v.id',(channel,) if channel else ())
+        for row in rows:
+            total+=1;quality=inspect_text(row['transcript'])
+            counts[quality['status']]+=1
+            for name in quality['technical_markers']:marker_counts[name]+=1
+            if quality['status']!='no_heuristic_alert':
+                flagged.append(dict(youtube_id=row['youtube_id'],title=row['title'],channel=row['channel'],language=row['lang_config'],quality=quality))
+            if total%500==0:print(f'Qualité : {total} textes analysés, aucun accès réseau',flush=True)
+    previews=[]
+    if sample_limit and flagged:
+        inventory=core.caption_inventory(runtime)
+        priority=sorted(flagged,key=lambda x:(x['quality']['status']!='technical_issue',-sum(x['quality']['technical_markers'].values())))
+        with core.closing_database(core.connect(runtime.db,True)) as db:
+            for item in priority:
+                if len(previews)>=sample_limit:break
+                ident=item['youtube_id'];lang=item['language'] or 'fr'
+                languages=['en-orig','en','fr-orig','fr','und'] if lang=='en' else ['fr-orig','fr','en-orig','en','und']
+                source=review_source(inventory,ident,languages)
+                before=db.execute('SELECT transcript FROM videos WHERE youtube_id=?',(ident,)).fetchone()[0]
+                mode='raw_captions' if source else 'text_markup_only'
+                if not source:
+                    # No guessed deduplication: remove only identifiable markup
+                    # in a review copy and preserve every spoken word/repetition.
+                    source=dict(language='und',path='production transcript; raw VTT/SRT not found',
+                                original=before.encode('utf-8'),candidate=core.strip_caption_markup(before),extension='txt')
+                sample_dir=target/ident;sample_dir.mkdir()
+                (sample_dir/'before.txt').write_text(before,encoding='utf-8')
+                (sample_dir/'after.txt').write_text(source['candidate'],encoding='utf-8')
+                archive=sample_dir/f"original.{source['language']}.{source['extension']}.gz"
+                archive.write_bytes(gzip.compress(source['original'],mtime=0))
+                if gzip.decompress(archive.read_bytes())!=source['original']:raise RuntimeError('Archive source invalide')
+                after_quality=inspect_text(source['candidate'])
+                preview=dict(youtube_id=ident,title=item['title'],channel=item['channel'],source_path=source['path'],
+                             language=source['language'],source_sha256=hashlib.sha256(source['original']).hexdigest(),
+                             cleaner_version=core.CAPTION_VERSION,reprocessing_mode=mode,before_quality=item['quality'],after_quality=after_quality,
+                             before_characters=len(before),after_characters=len(source['candidate']),
+                             snippets=compare_snippets(before,source['candidate']),production_modified=False)
+                core.atomic_json(sample_dir/'comparison.json',preview)
+                previews.append(preview)
+    report=dict(generated_at=core.now(),texts_scanned=total,status_counts=dict(counts),marker_text_counts=dict(marker_counts),
+                flagged=flagged,previews=previews,network_requests=0,production_modified=False,
+                note='Les répétitions sont des alertes à relire, pas une preuve de défaut. Aucune alerte ne garantit pas une transcription parfaite.')
+    core.atomic_json(target/'RESULT.json',report)
+    markdown='# Contrôle qualité des transcriptions\n\nLecture seule de la base. Aucun accès à YouTube, aucun audio, aucun texte de production remplacé.\n\n'
+    markdown+=f'Textes analysés : **{total}**.\n\n| Résultat | Textes |\n|---|---:|\n'
+    labels={'technical_issue':'Marqueurs techniques suspects','repetition_review':'Répétitions à relire','no_heuristic_alert':'Aucune alerte heuristique'}
+    for key,count in counts.items():markdown+=f'| {labels[key]} | {count} |\n'
+    markdown+='\nLes répétitions peuvent être réellement prononcées. Elles ne sont jamais supprimées globalement.\n'
+    for item in previews:
+        ident=item['youtube_id'];markdown+=f"\n## {item['channel']} — {item['title']}\n\nVidéo : https://www.youtube.com/watch?v={ident}\n\n[Texte actuel]({ident}/before.txt) · [Copie retraitée]({ident}/after.txt) · [Comparaison détaillée]({ident}/comparison.json)\n\n"
+        mode='Retraitement depuis une source horodatée locale.' if item['reprocessing_mode']=='raw_captions' else 'Source VTT/SRT non retrouvée : copie nettoyée des seules balises, sans suppression de répétitions.'
+        markdown+=f"{mode}\n\nMarqueurs techniques avant/après : {sum(item['before_quality']['technical_markers'].values())} / {sum(item['after_quality']['technical_markers'].values())}. Répétitions suspectes avant/après : {item['before_quality']['suspected_repetitions']} / {item['after_quality']['suspected_repetitions']}.\n"
+        for difference in item['snippets'][:2]:
+            markdown+=f"\nAvant :\n\n```text\n{difference['before']}\n```\n\nAprès :\n\n```text\n{difference['after']}\n```\n"
+    markdown+='\n## Conservation avant nettoyage\n\nUne source horodatée compressée, son empreinte, la provenance et un texte validé suffisent à refaire le traitement hors ligne. Les anciens TXT et packs sont des dérivés régénérables. Si la source manque ou si la qualité reste douteuse, conserver les fichiers existants. Aucun ancien fichier n’est supprimé par ce contrôle.\n'
+    (target/'REPORT.md').write_text(markdown,encoding='utf-8')
+    print(json.dumps(dict(texts_scanned=total,status_counts=dict(counts),previews=len(previews),report=str(target/'REPORT.md')),ensure_ascii=False))
+    return report,target
+
+
+def main():
+    if hasattr(sys.stdout,'reconfigure'):sys.stdout.reconfigure(encoding='utf-8',errors='replace')
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parent.parent)
+    parser.add_argument('--channel')
+    parser.add_argument('--samples',type=int,default=6)
+    args=parser.parse_args()
+    audit_quality(core.Runtime(args.root),args.channel,args.samples)
+
+
+if __name__=='__main__':main()

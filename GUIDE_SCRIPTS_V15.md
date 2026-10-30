@@ -17,6 +17,8 @@ Le fonctionnement actuel et les règles de stockage sont décrits dans [STORAGE_
 
 Les commandes audio sont différées et bloquées par la politique active. Les suppressions de médias restent suspendues jusqu'à présentation et approbation d'un lot précis. Les anciens outils v14 et les variantes spécifiques sont conservés pour référence ; ils ne constituent pas le parcours validé.
 
+- `python SCRIPTS/caption_quality.py --samples 6` : contrôle qualité et copies avant/après, sans accès réseau ni remplacement de la base.
+
 ## Tests hors ligne
 
 ```powershell

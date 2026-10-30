@@ -44,3 +44,5 @@ assets/pilot-packs/
 # Personal channel selections remain local
 DATABASE/oussama_config.csv
 DATABASE/oussama_standalone.csv
+
+DATABASE/quality_approvals/
