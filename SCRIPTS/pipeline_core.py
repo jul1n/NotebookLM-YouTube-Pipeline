@@ -205,7 +205,7 @@ def run_yt(runtime, db, args, ident=None):
                                 "--sleep-requests", "2", "--retries", "2", *args],
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, encoding="utf-8", errors="replace")
-    deadline = time.monotonic() + 1800
+    deadline = time.monotonic() + getattr(runtime,'network_timeout_seconds',1800)
     try:
         while True:
             try:
@@ -343,7 +343,8 @@ def sync(runtime, channel=None, force=False, limit=500, offline=False):
             time.sleep(5)
 
 
-def discover(runtime, channel=None):
+def discover(runtime, channel=None, playlist_limit=50):
+    if not 1<=playlist_limit<=50:raise ValueError('Discovery limit must be between 1 and 50')
     with closing_database(connect(runtime.db)) as db:
         init_state(db)
         pause_guard(db)
@@ -368,7 +369,7 @@ def discover(runtime, channel=None):
                     pass
             if entries is None:
                 # Bounded catch-up, not a complete historical inventory.
-                output = run_yt(runtime, db, ["--flat-playlist", "--playlist-end", "50", "--dump-single-json", chan["yt_url"]])
+                output = run_yt(runtime, db, ["--flat-playlist", "--playlist-end", str(playlist_limit), "--dump-single-json", chan["yt_url"]])
                 info = json.loads(output)
                 cid = info.get("channel_id") or cid
                 entries = info.get("entries", [])

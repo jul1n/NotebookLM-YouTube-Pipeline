@@ -87,7 +87,7 @@ def compare_snippets(before,after):
     return changes
 
 
-def audit_quality(runtime,channel=None,sample_limit=6):
+def audit_quality(runtime,channel=None,sample_limit=6,progress=None):
     if not 0<=sample_limit<=20:raise ValueError('Choisir entre 0 et 20 exemples retraités')
     target=runtime.database_dir/'pilot_reports'/('quality-'+str(time.time_ns()))
     target.mkdir(parents=True)
@@ -102,7 +102,9 @@ def audit_quality(runtime,channel=None,sample_limit=6):
             for name in quality['technical_markers']:marker_counts[name]+=1
             if quality['status']!='no_heuristic_alert':
                 flagged.append(dict(youtube_id=row['youtube_id'],title=row['title'],channel=row['channel'],language=row['lang_config'],quality=quality))
-            if total%500==0:print(f'Qualité : {total} textes analysés, aucun accès réseau',flush=True)
+            if total%500==0:
+                print(f'Qualité : {total} textes analysés, aucun accès réseau',flush=True)
+                if progress:progress(total)
     previews=[]
     if sample_limit and flagged:
         inventory=core.caption_inventory(runtime)

@@ -46,3 +46,7 @@ DATABASE/oussama_config.csv
 DATABASE/oussama_standalone.csv
 
 DATABASE/quality_approvals/
+
+# Private one-night maintenance and reversible source archives
+DATABASE/night_runs/
+WORKING_ZONE/_LEGACY_RENDERED_GZ/
