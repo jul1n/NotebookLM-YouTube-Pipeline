@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 
 import caption_quality as quality
@@ -154,7 +155,16 @@ def apply(runtime,target):
     if Path(plan['root'])!=runtime.root or Path(plan['database'])!=runtime.db:raise ValueError('Wrong repository')
     backup,backup_proof=verified_backup(runtime)
     # Any newer snapshot is accepted only after comparing each exact active text.
-    completed=set();journal=target/'DELETION_JOURNAL.jsonl';totals=Counter();counts=Counter();held=Counter()
+    drive_journal=target/'DELETION_JOURNAL.jsonl'
+    runtime.work.mkdir(parents=True,exist_ok=True);runtime.check_space(32*1024**2)
+    jobkey=hashlib.sha256(str(target).encode('utf8')).hexdigest()[:12]
+    journal=runtime.work/f'storage-delete-{jobkey}.jsonl'
+    core.atomic_json(target/'JOURNAL_LOCATION.json',dict(canonical_local_journal=str(journal),drive_mirror=str(drive_journal)))
+    if not journal.exists() and drive_journal.exists():shutil.copyfile(drive_journal,journal)
+    def mirror():
+        if journal.exists():
+            staged=drive_journal.with_suffix('.jsonl.tmp');shutil.copyfile(journal,staged);os.replace(staged,drive_journal)
+    completed=set();totals=Counter();counts=Counter();held=Counter()
     if journal.exists():
         for line in journal.read_text(encoding='utf8').splitlines():
             item=json.loads(line)
@@ -184,7 +194,9 @@ def apply(runtime,target):
                 totals[category]+=item['size_bytes'];counts[category]+=1
             except (OSError,ValueError,UnicodeError,EOFError) as error:
                 held[str(error)]+=1;record(dict(action='kept',path=item['path'],reason=str(error)))
-            if sum(counts.values())%250==0:print(json.dumps(dict(deleted=dict(counts),bytes=dict(totals))),flush=True)
+            if sum(counts.values())%250==0:
+                mirror();print(json.dumps(dict(deleted=dict(counts),bytes=dict(totals))),flush=True)
+    mirror()
     result=dict(finished_at=core.now(),deleted_files=dict(counts),deleted_bytes=dict(totals),kept=dict(held),backup=str(backup),network_calls=0)
     core.atomic_json(target/'DELETED.json',result);print(json.dumps(result),flush=True)
 
