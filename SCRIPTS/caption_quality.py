@@ -1,5 +1,6 @@
 """Offline diagnostics and review copies. Never updates production transcripts."""
 import argparse
+from bisect import bisect_left, bisect_right
 from collections import Counter
 import difflib
 import gzip
@@ -40,10 +41,15 @@ def inspect_text(text):
     # transcripts, and do not mistake repeated VTT markup for spoken words.
     visible=core.strip_caption_markup(text)
     tokens=list(TOKEN.finditer(visible));words=[t[0].casefold() for t in tokens]
+    positions={}
+    for n,word in enumerate(words):positions.setdefault(word,[]).append(n)
     repetition_count=0;example_counts=Counter();i=0
     while i<len(words):
         width=0;kind='repeated_phrase'
-        for size in range(min(12,(len(words)-i)//2),2,-1):
+        occurrences=positions[words[i]]
+        stops=occurrences[bisect_left(occurrences,i+3):bisect_right(occurrences,i+min(12,(len(words)-i)//2))]
+        for following in reversed(stops):
+            size=following-i
             if words[i:i+size]==words[i+size:i+2*size]:width=2*size;break
         if not width and i+6<=len(words) and words[i:i+2]==words[i+2:i+4]==words[i+4:i+6]:
             width=6;kind='repeated_pair'

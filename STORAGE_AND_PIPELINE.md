@@ -117,3 +117,15 @@ La règle de conservation est donc : une source horodatée exploitable et vérif
 `SCRIPTS/caption_reconstruction.py` traite le motif observé dans les exemples Marc Lou : un bloc enrichi de balises, puis deux rendus identiques en clair. Il ne recherche pas des phrases répétées à supprimer dans un texte quelconque. Chaque ligne retirée doit être une copie normalisée exacte du bloc gardé ; le nombre de lignes et de mots conservés est contrôlé. Les répétitions à des instants différents sont conservées.
 
 Le rapport enregistre version, empreintes, groupes confirmés, groupes sans horodatage inférés, régressions temporelles et blocs avant/après alignés. Il fournit aussi le début du texte reconstruit pour une lecture continue. Les inférences et les alertes résiduelles nécessitent une relecture. Les erreurs de reconnaissance vocale du sous-titre d'origine ne sont pas corrigées par cette reconstruction.
+
+## Entretien local des anomalies historiques
+
+`python SCRIPTS/caption_maintenance.py --plan DATABASE/pilot_reports/nom-du-lot` prépare un plan privé sans modifier les textes. L'option facultative `--baseline CHEMIN/RESULT.json` utilise un audit antérieur pour prioriser ; chaque modification proposée est revérifiée sur le texte actuel et un nouvel audit complet suit l'application.
+
+Après lecture du rapport : `python SCRIPTS/caption_maintenance.py --plan DATABASE/pilot_reports/nom-du-lot --apply`.
+
+Le traitement retire les paires d'en-têtes `Kind: captions Language: ...` uniquement en début de texte, ainsi que leurs paramètres d'affichage. Les balises restantes sont nettoyées sans correction du vocabulaire. Dans les fichiers partiellement endommagés, seules les copies identiques rattachées à une ligne horodatée sont retirées, avec au moins dix groupes confirmés ; les groupes sans horodatage restent présents.
+
+Pour les anciens textes aplatis sans horodatage, la reconstruction exige au moins 98 % de mots dans des triples copies exactes, cent groupes au total et trente groupes de six mots ou plus. Seules les copies des groupes d'au moins six mots sont retirées. Cette règle est une inférence du format du document, pas une certification de la parole originale. Les répétitions courtes, partielles, isolées ou insuffisamment documentées restent signalées.
+
+L'application exige le journal `pipeline_revisions` existant, effectue une sauvegarde vérifiée, conserve chaque original compressé avec ses empreintes et préserve la provenance de la source horodatée. Une modification concurrente interrompt le traitement. Une reprise ne réapplique pas les textes déjà identiques au résultat prévu. SQLite/FTS sont contrôlés, les packs et le dashboard régénérés, puis une sauvegarde finale est vérifiée. Aucun appel à YouTube, aucun audio, aucune suppression de média ou d'archive historique.
