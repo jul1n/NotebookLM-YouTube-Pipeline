@@ -17,6 +17,9 @@ compressée. Cette copie n'est pas présentée comme une source horodatée.
 Pour les textes présentant des répétitions, les cas prioritaires restent protégés.
 Les autres doivent concorder avec une source VTT/SRT compressée dont l'empreinte
 est contrôlée. Les répétitions réellement prononcées restent présentes.
+Les anciens rendus sont aussi acceptés lorsqu'un format systématique de trois
+copies variées est confirmé et que sa reconstruction reproduit le texte actuel.
+Leur original compressé et son empreinte restent conservés.
 
 Les sources canoniques, originaux des corrections, sauvegardes et journaux SQLite
 ne sont jamais des cibles de ce traitement. Les chemins et dates de modification

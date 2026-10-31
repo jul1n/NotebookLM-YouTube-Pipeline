@@ -103,6 +103,16 @@ def media_proof(runtime,db,ident,text):
     record=db.execute('SELECT * FROM pipeline_transcripts WHERE youtube_id=?',(ident,)).fetchone()
     if not record:return None,'missing_canonical_timed_source'
     source=Path(record['raw_path'])
+    legacy=runtime.root/'WORKING_ZONE/_LEGACY_RENDERED_GZ'
+    if source.resolve().is_relative_to(legacy.resolve()) and source.name.endswith('.rendered.txt.gz'):
+        raw=gzip.decompress(source.read_bytes());sha=hashlib.sha256(raw).hexdigest()
+        if sha!=record['sha256']:return None,'source_checksum_mismatch'
+        from caption_source_repair import complete_triplicates
+        rebuilt,evidence=complete_triplicates(core.strip_caption_markup(raw.decode('utf8')))
+        if not evidence['accepted'] or canonical_words(rebuilt)!=canonical_words(text):return None,'legacy_source_reconstruction_not_confirmed'
+        return dict(raw_path=str(source),raw_sha256=sha,text_sha256=digest(text),quality=q,
+                    source_kind='verified_systematic_triplicate_original',reconstruction=evidence,
+                    cleaner_version=core.CAPTION_VERSION),'verified_legacy_source_and_reconstructed_text'
     if not source.resolve().is_relative_to(runtime.archive.resolve()):return None,'source_not_canonical_vtt_srt'
     if not source.name.endswith(('.vtt.gz','.srt.gz')):return None,'source_not_canonical_vtt_srt'
     raw=gzip.decompress(source.read_bytes());sha=hashlib.sha256(raw).hexdigest()

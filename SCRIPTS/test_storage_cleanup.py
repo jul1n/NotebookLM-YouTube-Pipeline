@@ -79,5 +79,20 @@ class CleanupTest(unittest.TestCase):
                 source.write_bytes(gzip.compress(b'bad source'))
                 self.assertIsNone(cleanup.media_proof(self.runtime,db,'abcdefghijk','Bonjour le monde.')[0])
 
+    def test_legacy_requires_complete_varied_triplicates_and_matching_text(self):
+        units=[' '.join(f'word{n}_{k}' for k in range(6)) for n in range(30)]
+        raw=' '.join(unit+' '+unit+' '+unit for unit in units).encode('utf8');text=' '.join(units)
+        folder=self.root/'WORKING_ZONE/_LEGACY_RENDERED_GZ';folder.mkdir(parents=True)
+        source=folder/'abcdefghijk.rendered.txt.gz';source.write_bytes(gzip.compress(raw))
+        q=cleanup.quality.inspect_text(text);q['status']='repetition_review'
+        with core.closing_database(core.connect(self.runtime.db)) as db,patch.object(cleanup.quality,'inspect_text',return_value=q):
+            db.execute('INSERT INTO pipeline_transcripts VALUES(?,?,?,?,?,?,?)',('abcdefghijk','en','legacy-rendered-captions',str(source),hashlib.sha256(raw).hexdigest(),'old',core.now()))
+            proof=cleanup.media_proof(self.runtime,db,'abcdefghijk',text)[0]
+            self.assertEqual(proof['source_kind'],'verified_systematic_triplicate_original')
+            self.assertIsNone(cleanup.media_proof(self.runtime,db,'abcdefghijk',text+' extra words')[0])
+            raw=b'repeat repeat repeat repeat repeat repeat';source.write_bytes(gzip.compress(raw))
+            db.execute('UPDATE pipeline_transcripts SET sha256=?',(hashlib.sha256(raw).hexdigest(),))
+            self.assertIsNone(cleanup.media_proof(self.runtime,db,'abcdefghijk',text)[0])
+
 
 if __name__=='__main__':unittest.main()
