@@ -32,9 +32,10 @@ def preserve(root):
     bare=folder/'nonmedia-history.git'
     if bare.exists():raise RuntimeError('Existing safeguard: inspect instead of overwrite')
     run(root,'init','--bare',str(bare),capture_output=True)
-    exporter=subprocess.Popen(['git','-C',str(root),'fast-export','--all','--',*paths],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    # fast-export consumes one separator itself; pass the revision parser its own.
+    exporter=subprocess.Popen(['git','-C',str(root),'fast-export','--all','--','--',*paths],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     importer=subprocess.run(['git','-C',str(bare),'fast-import','--quiet'],stdin=exporter.stdout,capture_output=True)
-    exporter.stdout.close();error=exporter.stderr.read();status=exporter.wait()
+    exporter.stdout.close();error=exporter.stderr.read();exporter.stderr.close();status=exporter.wait()
     if status or importer.returncode:raise RuntimeError('History export/import failed: '+error.decode(errors='replace')+importer.stderr.decode(errors='replace'))
     run(bare,'fsck','--full',capture_output=True)
     bundle=folder/'nonmedia-history-20261031.bundle'
