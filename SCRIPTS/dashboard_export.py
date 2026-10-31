@@ -26,6 +26,21 @@ def export_dashboard(runtime,template=None):
         fetch=lambda name:[dict(row) for row in db.execute(query_template(source,name))]
         stats=fetch('statsSql')[0]
         search=fetch('searchSql');health=fetch('healthSql');recovery=fetch('recoverySql')
+        excluded=core.quality_exclusions(runtime,db)
+        search=[row for row in search if row.get('youtube_id') not in excluded]
+        for row in excluded.values():
+            text=row['transcript'] or '';word_count=len(text)-len(text.replace(' ',''))+1
+            stats['totalVids']=max(0,(stats.get('totalVids') or 0)-1)
+            stats['totalWords']=max(0,(stats.get('totalWords') or 0)-word_count)
+            stats['totalHours']=max(0,(stats.get('totalHours') or 0)-float(row.get('duration') or 0)/3600)
+            channel=db.execute('SELECT prefix FROM channels WHERE id=?',(row['channel_id'],)).fetchone()
+            for item in health:
+                if channel and item.get('Chaine')==channel[0]:
+                    item['Quality_Excluded']=item.get('Quality_Excluded',0)+1
+                    if 'Total_Local' in item:item['Total_Local']=max(0,(item['Total_Local'] or 0)-1)
+                    if 'Word_Count' in item:item['Word_Count']=max(0,(item['Word_Count'] or 0)-word_count)
+                    if 'Est_Packs' in item:item['Est_Packs']=((item.get('Word_Count') or 0)+199999)//200000
+                    if item.get('Total_YouTube'):item['Success_Rate']=str(round(100*item['Total_Local']/item['Total_YouTube'],1))+'%'
         count=lambda where:db.execute('SELECT count(*) FROM videos WHERE '+where).fetchone()[0]
         words=stats.get('totalWords') or 0;hours=stats.get('totalHours') or 0
         if hours<1 and words:hours=round(words/9000)
@@ -36,7 +51,7 @@ def export_dashboard(runtime,template=None):
         values=dict(totalVids=stats.get('totalVids') or 0,totalHours=round(hours,1),totalWords=words,
                     lastSync=datetime.now().strftime('%H:%M (%d/%m)'),channelCount=db.execute('SELECT count(*) FROM channels').fetchone()[0],
                     totalMissing=count("status IN ('MISSING','PENDING')"),totalFailed=count("status LIKE 'ERR_DL_FAIL%'"),
-                    totalPremium=count("status='PREMIUM'"),totalNoSubs=count("status LIKE 'ERR_NO_EN_FR%' OR status LIKE 'ERR_TOO_SHORT%' OR status='NO_SUBS'"),channelsConfig=channels)
+                    totalPremium=count("status='PREMIUM'"),totalNoSubs=count("status LIKE 'ERR_NO_EN_FR%' OR status LIKE 'ERR_TOO_SHORT%' OR status='NO_SUBS'"),channelsConfig=channels,totalQualityExcluded=len(excluded))
     assets=runtime.root/'assets';assets.mkdir(exist_ok=True)
     serialize=lambda value:json.dumps(value,ensure_ascii=True,separators=(',',':'))
     files={'stats.js':'const GLOBAL_STATS = '+serialize(values)+';',
@@ -46,4 +61,4 @@ def export_dashboard(runtime,template=None):
         temporary=assets/(name+'.tmp')
         temporary.write_text(content,encoding='utf-8');os.replace(temporary,assets/name)
     core.atomic_json(runtime.database_dir/'health_report.json',health)
-    return dict(refreshed=True,engine='python',channels=len(health),transcripts=values['totalVids'])
+    return dict(refreshed=True,engine='python',channels=len(health),transcripts=values['totalVids'],quality_excluded=len(excluded))

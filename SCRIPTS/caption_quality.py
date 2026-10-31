@@ -24,6 +24,9 @@ MARKERS = {
     'vtt_header': re.compile(r'\bWEBVTT\b|(?:^|\n)(?:Kind:\s*captions|Language:\s*[a-z]{2})',re.I),
 }
 TOKEN = re.compile(r"\b[\w’'-]+\b")
+SOUND_ANNOTATION = re.compile(r'\[(?:music|musique|applause|applaudissements|laughter|rires|laughs|silence|inaudible)\]',re.I)
+ENCODING_ARTIFACT = re.compile(r'\ufffd|Ôò|Ôö|û[▓╣┬│]|[┬├][\x80-\uFFFF]')
+FILLERS = set("um uh uhm er ah hmm mm the and so that no yes i you know mean think like well je le la les et donc oui non un euh alors tu sais quoi que des de c’est c'est".split())
 
 
 def context(text, start, end, radius=100):
@@ -41,9 +44,12 @@ def inspect_text(text):
     # transcripts, and do not mistake repeated VTT markup for spoken words.
     visible=core.strip_caption_markup(text)
     tokens=list(TOKEN.finditer(visible));words=[t[0].casefold() for t in tokens]
+    annotation_starts={t.start() for event in SOUND_ANNOTATION.finditer(visible)
+                       for t in TOKEN.finditer(visible,event.start(),event.end())}
     positions={}
     for n,word in enumerate(words):positions.setdefault(word,[]).append(n)
     repetition_count=0;example_counts=Counter();i=0
+    covered_words=0;max_unit=0;long_alerts=0;nonverbal_alerts=0;filler_alerts=0
     while i<len(words):
         width=0;kind='repeated_phrase'
         occurrences=positions[words[i]]
@@ -57,13 +63,24 @@ def inspect_text(text):
             width=4;kind='repeated_word'
         if width:
             repetition_count+=1
+            unit=width//2 if kind=='repeated_phrase' else 2 if kind=='repeated_pair' else 1
+            covered_words+=width;max_unit=max(max_unit,unit);long_alerts+=unit>=6
+            nonverbal_alerts+=all(t.start() in annotation_starts for t in tokens[i:i+width])
+            unit_words=words[i:i+unit]
+            short_period=(unit<=2 or len(set(unit_words))==1
+                          or unit%2==0 and unit_words==unit_words[:2]*(unit//2))
+            filler_alerts+=short_period and all(w in FILLERS for w in words[i:i+width])
             if example_counts[kind]<2:
                 examples.append(dict(kind=kind,excerpt=context(visible,tokens[i].start(),tokens[i+width-1].end())))
                 example_counts[kind]+=1
             i+=width
         else:i+=1
     status='technical_issue' if counts else 'repetition_review' if repetition_count else 'no_heuristic_alert'
-    return dict(status=status,technical_markers=counts,suspected_repetitions=repetition_count,examples=examples)
+    return dict(status=status,technical_markers=counts,suspected_repetitions=repetition_count,examples=examples,
+                review_signals=dict(word_count=len(words),repeated_word_fraction=covered_words/max(1,len(words)),
+                                    longest_repeated_unit=max_unit,long_repetition_alerts=long_alerts,
+                                    nonverbal_only_alerts=nonverbal_alerts,short_filler_alerts=filler_alerts,
+                                    encoding_artifacts=len(ENCODING_ARTIFACT.findall(text))))
 
 
 def review_source(index,ident,languages):
@@ -97,13 +114,14 @@ def audit_quality(runtime,channel=None,sample_limit=6,progress=None):
     if not 0<=sample_limit<=20:raise ValueError('Choisir entre 0 et 20 exemples retraités')
     target=runtime.database_dir/'pilot_reports'/('quality-'+str(time.time_ns()))
     target.mkdir(parents=True)
-    counts=Counter();marker_counts=Counter();flagged=[];total=0
+    counts=Counter();marker_counts=Counter();flagged=[];total=0;transcript_hashes={}
     query='''SELECT v.youtube_id,v.title,v.transcript,v.status,c.prefix AS channel,c.lang_config
     FROM videos v JOIN channels c ON c.id=v.channel_id WHERE trim(COALESCE(v.transcript,''))!='' '''
     with core.closing_database(core.connect(runtime.db,True)) as db:
         rows=db.execute(query+(' AND c.prefix=?' if channel else '')+' ORDER BY v.id',(channel,) if channel else ())
         for row in rows:
             total+=1;quality=inspect_text(row['transcript'])
+            transcript_hashes[row['youtube_id']]=hashlib.sha256(row['transcript'].encode('utf8')).hexdigest()
             counts[quality['status']]+=1
             for name in quality['technical_markers']:marker_counts[name]+=1
             if quality['status']!='no_heuristic_alert':
@@ -150,6 +168,7 @@ def audit_quality(runtime,channel=None,sample_limit=6,progress=None):
                 previews.append(preview)
     report=dict(generated_at=core.now(),texts_scanned=total,status_counts=dict(counts),marker_text_counts=dict(marker_counts),
                 flagged=flagged,previews=previews,network_requests=0,production_modified=False,
+                transcript_hashes=transcript_hashes,
                 note='Les répétitions sont des alertes à relire, pas une preuve de défaut. Aucune alerte ne garantit pas une transcription parfaite.')
     core.atomic_json(target/'RESULT.json',report)
     markdown='# Contrôle qualité des transcriptions\n\nLecture seule de la base. Aucun accès à YouTube, aucun audio, aucun texte de production remplacé.\n\n'

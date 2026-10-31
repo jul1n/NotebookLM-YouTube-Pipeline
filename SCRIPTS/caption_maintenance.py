@@ -156,17 +156,23 @@ def plan(runtime,target,baseline=None):
 
 def report(target,result,applied=None):
     text='# Entretien local des transcriptions\n\nAucun accès réseau, aucun audio, aucune suppression de média.\n\n'
-    text+=f"Textes parcourus : {result['texts_scanned']}. Corrections proposées : {result['changes']}.\n\n"
+    text_changes=sum(not x.get('metadata_only',False) for x in result['entries'])
+    text+=f"Textes parcourus : {result['texts_scanned']}. Corrections de texte proposées : {text_changes}. Sources supplémentaires à archiver/lier sans modifier le texte : {result['changes']-text_changes}.\n\n"
     labels=dict(systemic_triplicates='Triples copies systématiques corrigibles',technical_metadata='En-têtes, balises ou copies horodatées corrigibles',
+                completed_systemic_triplicates='Reconstruction complète depuis un original à triples copies',short_systemic_triplicates='Formats courts à triples copies variées',verified_local_timed_source='Reconstruction depuis une source horodatée locale concordante',demonstrated_encoding_restoration='Caractères restaurés par correspondances indépendamment démontrées',verified_source_archival_only='Source horodatée archivée et reliée au texte déjà concordant',
                 partial_triplicates_needs_source='Triples copies partielles : source à examiner',frequent_repetitions_unconfirmed='Répétitions nombreuses, origine non confirmée',
                 isolated_repetitions_unconfirmed='Répétitions moins nombreuses, origine non confirmée',unresolved_markup='Marqueurs techniques non résolus',candidate_rejected='Candidat rejeté par les contrôles')
     for name,count in result['counts'].items():text+=f'- {labels.get(name,name)} : {count}\n'
-    text+='\nLes triplicats systématiques sont inférés du format de tout le document (98 % minimum, 100 groupes minimum, 30 groupes longs minimum). Seules les copies de blocs de six mots ou plus sont retirées. Les répétitions courtes, partielles ou isolées restent à relire. Une inférence sans horodatage ne certifie pas la parole originale.\n'
+    if result.get('source_cleaner'):
+        text+='\nLes sources horodatées concordantes sont retraitées en distinguant les nouvelles paroles des lignes maintenues à l’écran. Les anciens triples rendus variés peuvent être reconstruits entièrement : couverture de 98 %, au moins 25 groupes, 20 unités distinctes et 20 groupes longs. Les répétitions à l’intérieur d’une unité conservée restent intactes ; une boucle uniforme ne prouve pas ce format.\n'
+        text+='\nLes corrections d’encodage éventuelles reposent sur des modèles de caractères démontrés dans au moins trois vidéos indépendantes, avec au moins dix occurrences et aucune ambiguïté. Elles conservent toutes les lettres et chiffres ASCII dans le même ordre. Aucun mot manquant n’est deviné.\n'
+    else:
+        text+='\nLes triplicats systématiques sont inférés du format de tout le document (98 % minimum, 100 groupes minimum, 30 groupes longs minimum). Seules les copies de blocs de six mots ou plus sont retirées. Les répétitions courtes, partielles ou isolées restent à relire. Une inférence sans horodatage ne certifie pas la parole originale.\n'
     if applied is not None:text+=f'\nCorrections appliquées et originaux vérifiés : **{applied}**.\n'
     text+='\n## Exemples avant / après\n'
     samples=sorted((x for x in result['entries'] if x['apply']),key=lambda x:x['category'])
     selected=[]
-    for category in ('systemic_triplicates','technical_metadata'):
+    for category in sorted({x['category'] for x in samples}):
         selected.extend([x for x in samples if x['category']==category][:5])
     for item in selected:
         text+=f"\n### {item['channel']} — {item['title']} ({item['youtube_id']})\n\nAvant :\n\n```text\n{item['opening_before']}\n```\n\nAprès :\n\n```text\n{item['opening_after']}\n```\n"
@@ -186,12 +192,25 @@ def apply(runtime,target):
             # The existing revision table is mandatory: never silently create a
             # different journal or apply without the established rollback chain.
             db.execute('SELECT id FROM pipeline_revisions LIMIT 1')
+            if result.get('exclusions'):
+                with db:
+                    db.execute('''CREATE TABLE IF NOT EXISTS pipeline_quality_exclusions (
+                    youtube_id TEXT,transcript_sha256 TEXT,reason TEXT,evidence TEXT,created_at TEXT,
+                    PRIMARY KEY(youtube_id,transcript_sha256))''')
+                    for rule in result['exclusions']:
+                        active=db.execute('SELECT transcript FROM videos WHERE youtube_id=?',(rule['youtube_id'],)).fetchone()
+                        if not active or digest(active[0])!=rule['sha256']:raise RuntimeError('Concurrent edit in quality exclusion')
+                        db.execute('INSERT OR IGNORE INTO pipeline_quality_exclusions VALUES(?,?,?,?,?)',
+                                   (rule['youtube_id'],rule['sha256'],rule['reason'],json.dumps(rule,ensure_ascii=False),core.now()))
             for item in result['entries']:
                 if not item['apply']:continue
                 ident=item['youtube_id']
                 if not core.VIDEO_ID.fullmatch(ident):raise ValueError('Invalid ID')
                 current=db.execute('SELECT transcript FROM videos WHERE youtube_id=?',(ident,)).fetchone()[0]
-                if digest(current)==item['after_sha']:continue
+                if digest(current)==item['after_sha']:
+                    if not item.get('metadata_only'):continue
+                    present=db.execute('SELECT raw_path,sha256 FROM pipeline_transcripts WHERE youtube_id=?',(ident,)).fetchone()
+                    if present and present['raw_path']==item['timed_source']['raw_path'] and present['sha256']==item['timed_source']['sha256']:continue
                 if digest(current)!=item['before_sha']:raise RuntimeError('Concurrent edit: '+ident)
                 candidate=gzip.decompress((target/'candidates'/(ident+'.txt.gz')).read_bytes()).decode('utf8')
                 if digest(candidate)!=item['after_sha']:raise RuntimeError('Invalid candidate: '+ident)
@@ -202,27 +221,40 @@ def apply(runtime,target):
                 if hashlib.sha256(gzip.decompress(path.read_bytes())).hexdigest()!=item['before_sha']:raise RuntimeError('Invalid original')
                 old=db.execute('SELECT * FROM pipeline_transcripts WHERE youtube_id=?',(ident,)).fetchone()
                 with db:
-                    if db.execute('UPDATE videos SET transcript=? WHERE youtube_id=? AND transcript=?',(candidate,ident,current)).rowcount!=1:raise RuntimeError('Concurrent edit')
+                    db.execute('BEGIN IMMEDIATE')
+                    if db.execute('SELECT transcript FROM videos WHERE youtube_id=?',(ident,)).fetchone()[0]!=current:raise RuntimeError('Concurrent edit')
+                    if candidate!=current and db.execute('UPDATE videos SET transcript=? WHERE youtube_id=? AND transcript=?',(candidate,ident,current)).rowcount!=1:raise RuntimeError('Concurrent edit')
                     db.execute('INSERT INTO pipeline_revisions(job_id,youtube_id,before_sha,after_sha,original_gzip,old_metadata,proof,changed_at) VALUES(?,?,?,?,?,?,?,?)',
-                               (job,ident,item['before_sha'],item['after_sha'],str(path),json.dumps(dict(old)) if old else None,json.dumps(item,ensure_ascii=False),core.now()))
+                               (job,ident,item['before_sha'],item['after_sha'],str(path),json.dumps(dict(old)) if old else None,json.dumps(dict(item,maintenance_version=result['version']),ensure_ascii=False),core.now()))
+                    if item.get('timed_source'):
+                        source=item['timed_source'];source_path=Path(source['raw_path'])
+                        if hashlib.sha256(gzip.decompress(source_path.read_bytes())).hexdigest()!=source['sha256']:
+                            raise RuntimeError('Timed source checksum mismatch')
+                        db.execute('INSERT OR REPLACE INTO pipeline_transcripts VALUES(?,?,?,?,?,?,?)',
+                                   (ident,source['language'],'verified-local-timed-captions',str(source_path),source['sha256'],core.CAPTION_VERSION,core.now()))
                     # Preserve the real caption source provenance if present;
                     # this journal describes the derived text transformation.
-            applied=db.execute('SELECT count(*) FROM pipeline_revisions WHERE job_id=?',(job,)).fetchone()[0]
+            revision_count=db.execute('SELECT count(*) FROM pipeline_revisions WHERE job_id=?',(job,)).fetchone()[0]
+            applied=db.execute('SELECT count(*) FROM pipeline_revisions WHERE job_id=? AND before_sha!=after_sha',(job,)).fetchone()[0]
+            source_links=revision_count-applied
+            excluded=len(core.quality_exclusions(runtime,db))
             for row in db.execute('SELECT * FROM pipeline_revisions WHERE job_id=?',(job,)):
                 if hashlib.sha256(gzip.decompress(Path(row['original_gzip']).read_bytes())).hexdigest()!=row['before_sha']:raise RuntimeError('Original mismatch')
                 active=db.execute('SELECT transcript FROM videos WHERE youtube_id=?',(row['youtube_id'],)).fetchone()[0]
                 if digest(active)!=row['after_sha']:raise RuntimeError('Active mismatch')
         checks=integrity(runtime)
         report(target,result,applied)
-        core.atomic_json(target/'APPLIED.json',dict(job=job,changed=applied,integrity=checks,verified_at=core.now()))
+        core.atomic_json(target/'APPLIED.json',dict(job=job,changed=applied,source_links=source_links,revisions=revision_count,integrity=checks,verified_at=core.now()))
         audit,path=quality.audit_quality(runtime,sample_limit=0)
         core.packs(runtime)
         from dashboard_export import export_dashboard
         export_dashboard(runtime)
         core.backup(runtime)
-        core.atomic_json(target/'DONE.json',dict(changed=applied,integrity=checks,audit=str(path),counts=audit['status_counts'],finished_at=core.now(),network_calls=0))
+        core.atomic_json(target/'DONE.json',dict(changed=applied,source_links=source_links,revisions=revision_count,integrity=checks,audit=str(path),counts=audit['status_counts'],finished_at=core.now(),network_calls=0,quality_excluded=excluded))
         summary=f"# Bilan des corrections du 31 octobre 2026\n\n**{applied} textes corrigés**, originaux compressés et empreintes avant/après revérifiés. SQLite et FTS : contrôles réussis. Packs et dashboard régénérés ; sauvegardes vérifiées avant et après, rétention de trois sauvegardes gérées. Aucun appel réseau, aucun audio ni média supprimé.\n\n"
+        if source_links:summary+=f'**{source_links} sources horodatées supplémentaires** archivées et reliées sans modifier leurs textes déjà concordants.\n\n'
         summary+=f"Audit final sur {audit['texts_scanned']} textes :\n\n"
+        if excluded:summary+=f'- Textes conservés en base mais écartés des packs et de la recherche pour contenu inexploitable : {excluded}\n'
         for status,label in [('technical_issue','Alertes techniques'),('repetition_review','Textes avec répétitions à examiner'),('no_heuristic_alert','Textes sans alerte de ces règles')]:
             summary+=f"- {label} : {audit['status_counts'].get(status,0)}\n"
         summary+='\nCes nombres décrivent des textes signalés, pas autant d’erreurs confirmées. Des textes précédemment classés techniques peuvent maintenant apparaître dans les répétitions. Les répétitions courtes dans les documents reconstruits restent volontairement présentes.\n\n'

@@ -50,3 +50,5 @@ DATABASE/quality_approvals/
 # Private one-night maintenance and reversible source archives
 DATABASE/night_runs/
 WORKING_ZONE/_LEGACY_RENDERED_GZ/
+WORKING_ZONE/_VERIFIED_TEXT_GZ/
+DATABASE/history_safeguards/

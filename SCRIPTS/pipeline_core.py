@@ -22,7 +22,7 @@ from contextlib import contextmanager
 GIB = 1024 ** 3
 BUDGET_BYTES = 10_000_000_000
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
-CAPTION_VERSION = "timed-overlap-v2"
+CAPTION_VERSION = "timed-display-carry-v3"
 
 
 @contextmanager
@@ -43,6 +43,8 @@ def video_id(name):
 
 def strip_caption_markup(text):
     """Strip known caption markup, preserving literal comparisons such as <ami>."""
+    if '<' not in text and '&' not in text:
+        return text
     timestamp = r'<(?:\d+:)?\d{2}:\d{2}[.,]\d{3}>'
     tags = r'</?(?:c(?:\.[\w.-]+)*|v|lang|b|i|u|ruby|rt|font|span)(?:\s[^<>]*)?>'
     for _ in range(3):
@@ -53,29 +55,90 @@ def strip_caption_markup(text):
     return text
 
 
-def clean_captions(raw):
-    """Remove only rolling overlap between cues whose timestamps overlap."""
-    output, previous, previous_end = [], [], -1
-    for block in re.split(r"\r?\n\s*\r?\n", raw.strip()):
-        lines = block.splitlines()
-        index = next((i for i, line in enumerate(lines) if "-->" in line), None)
-        if index is None:
-            continue
-        matches = re.findall(r"(?:(\d{2,}):)?(\d{2}):(\d{2})[.,](\d{3})", lines[index])
+def clean_captions_detailed(raw):
+    """Keep newly spoken lines, proving adjacent YouTube display carry locally.
+
+    Ordinary adjacent identical cues are preserved. A rolling file must contain
+    at least two contiguous carry transitions with fresh inline word timestamps.
+    Only a matching plain leading line or its <=51 ms display snapshot is removed.
+    """
+    # Some legacy Windows copies contain CR CR LF after repeated text writes.
+    # Normalize line boundaries before parsing; never change payload words.
+    raw=raw.replace('\r\n','\n').replace('\r','\n')
+    cues=[]
+    timing=r'(?:(?:\d{2,}:)?\d{2}:\d{2}[.,]\d{3})'
+    boundaries=list(re.finditer(r'(?m)^'+timing+r'\s*-->\s*'+timing+r'[^\r\n]*(?:\r?\n|$)',raw))
+    prefix=raw[:boundaries[0].start()].strip() if boundaries else ''
+    numbered=prefix.isdigit() and all(
+        raw[a.end():b.start()].strip().splitlines()[-1:]==[str(int(prefix)+n+1)]
+        for n,(a,b) in enumerate(zip(boundaries[:3],boundaries[1:4])))
+    for n,boundary in enumerate(boundaries):
+        lines=raw[boundary.end():boundaries[n+1].start() if n+1<len(boundaries) else len(raw)].splitlines()
+        if numbered and n+1<len(boundaries):
+            while lines and not lines[-1].strip():lines.pop()
+            if lines and lines[-1].strip()==str(int(prefix)+n+1):lines.pop()
+        matches = re.findall(r"(?:(\d{2,}):)?(\d{2}):(\d{2})[.,](\d{3})", boundary[0])
         if len(matches) != 2:
             continue
         start, end = [int(h or 0)*3600 + int(m)*60 + int(s) + int(ms)/1000
                       for h, m, s, ms in matches]
-        words = strip_caption_markup(" ".join(lines[index+1:])).split()
+        payload=[]
+        for line in lines:
+            text=' '.join(strip_caption_markup(line).split())
+            if text:payload.append(dict(raw=line,text=text,stamped=bool(re.search(r'<(?:\d+:)?\d{2}:\d{2}[.,]\d{3}>',html.unescape(line)))))
+        cues.append(dict(start=start,end=end,lines=payload))
+
+    def adjacent(a,b):
+        return a['start']<=b['start'] and abs(a['end']-b['start'])<=.051
+
+    def carried(i):
+        if i==0:return False
+        previous,current=cues[i-1],cues[i]
+        return (adjacent(previous,current) and bool(previous['lines']) and len(current['lines'])>=2
+                and not current['lines'][0]['stamped']
+                and previous['lines'][-1]['text']==current['lines'][0]['text'])
+
+    def snapshot(i):
+        if not 0<i<len(cues)-1:return False
+        cue=cues[i];payload=cue['lines']
+        return (len(payload)==1 and not payload[0]['stamped'] and 0<=cue['end']-cue['start']<=.051
+                and cues[i-1]['lines'] and adjacent(cues[i-1],cue) and adjacent(cue,cues[i+1])
+                and carried(i+1) and payload[0]['text']==cues[i-1]['lines'][-1]['text'])
+
+    anchors=sum(carried(i) and any(line['stamped'] for line in cue['lines'][1:]) for i,cue in enumerate(cues))
+    snapshots=[i for i in range(len(cues)) if snapshot(i)]
+    snapshot_texts={cues[i]['lines'][0]['text'] for i in snapshots}
+    regressions=sum(b['start']<a['start'] for a,b in zip(cues,cues[1:]))
+    rolling=(anchors>=2 or len(snapshot_texts)>=3) and not regressions
+    removed=[];output=[];previous=[];previous_end=-1
+    for i,cue in enumerate(cues):
+        payload=cue['lines']
+        if rolling and carried(i):
+            removed.append(dict(kind='leading_display_carry',cue=i,start=cue['start'],text=payload[0]['text']))
+            payload=payload[1:]
+        elif rolling and snapshot(i):
+            removed.append(dict(kind='brief_display_snapshot',cue=i,start=cue['start'],text=payload[0]['text']))
+            payload=[]
+        elif (rolling and i==len(cues)-1 and i>0 and len(payload)==1 and not payload[0]['stamped']
+              and 0<=cue['end']-cue['start']<=.051 and cues[i-1]['lines'] and adjacent(cues[i-1],cue)
+              and payload[0]['text']==cues[i-1]['lines'][-1]['text']):
+            removed.append(dict(kind='terminal_brief_display_snapshot',cue=i,start=cue['start'],text=payload[0]['text']))
+            payload=[]
+        words=' '.join(line['text'] for line in payload).split()
         overlap = 0
-        if start < previous_end:
+        if cue['start'] < previous_end:
             for n in range(min(len(previous), len(words)), 0, -1):
                 if previous[-n:] == words[:n]:
                     overlap = n
                     break
         output.extend(words[overlap:])
-        previous, previous_end = words, end
-    return " ".join(output)
+        previous, previous_end = words, cue['end']
+    return " ".join(output),dict(cues=len(cues),rolling_anchors=anchors,snapshot_anchors=len(snapshots),timestamp_regressions=regressions,
+                                 removed_display_lines=len(removed),removed=removed)
+
+
+def clean_captions(raw):
+    return clean_captions_detailed(raw)[0]
 
 
 def atomic_json(path, data):
@@ -562,6 +625,21 @@ def backup(runtime):
     print(f"Sauvegarde SQLite vérifiée : {path}. Rétention : {retention} sauvegardes gérées.")
 
 
+def quality_exclusions(runtime, db):
+    """Only exclude the exact checked text; a later corrected text is eligible."""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='pipeline_quality_exclusions'").fetchone():return {}
+    rules=db.execute('SELECT * FROM pipeline_quality_exclusions').fetchall()
+    result={}
+    for rule in rules:
+        ident=rule['youtube_id']
+        if not VIDEO_ID.fullmatch(ident) or not re.fullmatch(r'[a-f0-9]{64}',rule['transcript_sha256']):
+            raise ValueError('Invalid quality exclusion')
+        row=db.execute('SELECT * FROM videos WHERE youtube_id=?',(ident,)).fetchone()
+        if row and hashlib.sha256((row['transcript'] or '').encode('utf8')).hexdigest()==rule['transcript_sha256']:
+            result[ident]=dict(row,quality_reason=rule['reason'])
+    return result
+
+
 def packs(runtime, word_limit=200000, channel=None):
     if word_limit < 1:
         raise ValueError("La limite de mots doit être positive")
@@ -575,6 +653,7 @@ def packs(runtime, word_limit=200000, channel=None):
     manifest = []
     try:
         with closing_database(connect(runtime.db, readonly=True)) as db:
+            excluded=quality_exclusions(runtime,db)
             channels = db.execute("SELECT id,prefix FROM channels"+(' WHERE prefix=?' if channel else '')+' ORDER BY id', (channel,) if channel else ()).fetchall()
             if channel and not channels:
                 raise ValueError('Chaîne inconnue')
@@ -588,6 +667,7 @@ def packs(runtime, word_limit=200000, channel=None):
                     manifest.append(dict(file=name, videos=list(ids), words=count))
                 rows = db.execute("SELECT youtube_id,title,upload_date,transcript FROM videos WHERE channel_id=? AND trim(COALESCE(transcript,''))!='' ORDER BY upload_date,id", (chan["id"],))
                 for row in rows:
+                    if row['youtube_id'] in excluded:continue
                     header = f"--- VIDEO: {row['title']} ({row['upload_date']}) https://www.youtube.com/watch?v={row['youtube_id']} ---"
                     # Split long videos, count headers as well, keep exact source IDs.
                     words = row["transcript"].split()
@@ -606,7 +686,8 @@ def packs(runtime, word_limit=200000, channel=None):
                         words = words[take:]
                 if buffer:
                     flush()
-        atomic_json(generation/"manifest.json", dict(generated_by="pipeline_core", generated_at=now(), packs=manifest))
+        atomic_json(generation/"manifest.json", dict(generated_by="pipeline_core", generated_at=now(), packs=manifest,
+                    quality_exclusions=[dict(youtube_id=k,reason=v['quality_reason']) for k,v in excluded.items()]))
         # Old packs remain available if any generation or DB query failed above.
         previous = base/("packs-previous-"+str(time.time_ns()))
         if output.exists():
@@ -843,7 +924,7 @@ def validate_channel(runtime, channel, limit=2):
         for sql in schema+triggers:fixture.execute(sql)
         columns=list(dict(chan));fixture.execute('INSERT INTO channels('+','.join(columns)+') VALUES('+','.join('?' for _ in columns)+')',[chan[k] for k in columns])
         for row,(lang,raw,ext) in selected:
-            (caption_dir/f"{row['youtube_id']}.{lang}.{ext}").write_text(raw,encoding='utf-8')
+            (caption_dir/f"{row['youtube_id']}.{lang}.{ext}").write_text(raw,encoding='utf-8',newline='')
             columns=list(row);values=dict(row,transcript=None,status='PENDING')
             fixture.execute('INSERT INTO videos('+','.join(columns)+') VALUES('+','.join('?' for _ in columns)+')',[values[k] for k in columns])
     pilot=Runtime(target/'workspace')
