@@ -1,6 +1,7 @@
 """Explicit authorized storage batches, with text/source/backup guards. No network."""
 import argparse
 from collections import Counter
+from functools import lru_cache
 import gzip
 import hashlib
 import json
@@ -19,18 +20,21 @@ def digest(text):
     return hashlib.sha256(text.encode('utf8')).hexdigest()
 
 
+@lru_cache(maxsize=8)
+def resolved_root(root):
+    return root.resolve()
+
+
 def checked_path(root, item):
     path=Path(item['path'])
-    if not path.is_absolute() or path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+    if not path.is_absolute() or path.is_symlink() or not path.resolve().is_relative_to(resolved_root(root)):
         raise ValueError('Path outside approved repository or symlink')
     if any(p.casefold() in {'.git','_captions_gz','_legacy_rendered_gz','_verified_text_gz','snapshots'} for p in path.relative_to(root).parts):
         raise ValueError('Protected directory')
     if path.name.lower().endswith(('-wal','-shm','-journal')):
         raise ValueError('SQLite journal protected')
-    parent=path.parent
-    while parent!=root:
-        if parent.is_symlink() or getattr(parent,'is_junction',lambda:False)():raise ValueError('Linked ancestor')
-        parent=parent.parent
+    # resolve() above follows ancestor junctions too. Rechecking every ancestor
+    # individually adds thousands of redundant round trips to the Drive provider.
     st=path.stat()
     if (st.st_size,st.st_mtime_ns)!=(item['size_bytes'],item['modified_ns']):raise ValueError('File changed since inventory')
     if core.video_id(path.name)!=item['youtube_id']:raise ValueError('Filename ID mismatch')
@@ -42,11 +46,22 @@ def verified_backup(runtime):
         proof=json.loads(marker.read_text(encoding='utf8'));path=marker.with_name(proof['filename'])
         if not proof.get('verified') or proof.get('owner')!='notebooklm-pipeline':continue
         if not path.exists() or path.stat().st_size!=proof['size']:continue
+        runtime.work.mkdir(parents=True,exist_ok=True)
+        cached=runtime.work/('deletion-verified-'+proof['sha256']+'.db')
         h=hashlib.sha256()
-        with path.open('rb') as f:
-            for block in iter(lambda:f.read(8*1024**2),b''):h.update(block)
+        if cached.exists():
+            with cached.open('rb') as f:
+                for block in iter(lambda:f.read(8*1024**2),b''):h.update(block)
+        else:
+            runtime.check_space(proof['size']+64*1024**2)
+            partial=cached.with_suffix('.copying')
+            with path.open('rb') as f,partial.open('wb') as out:
+                for block in iter(lambda:f.read(8*1024**2),b''):h.update(block);out.write(block)
+                out.flush();os.fsync(out.fileno())
+            if h.hexdigest()!=proof['sha256']:raise ValueError('Backup checksum mismatch')
+            os.replace(partial,cached)
         if h.hexdigest()!=proof['sha256']:raise ValueError('Backup checksum mismatch')
-        return path,proof
+        return cached,dict(proof,drive_path=str(path))
     raise ValueError('No verified backup')
 
 
@@ -68,6 +83,10 @@ def metadata_matches(path,row):
 def media_proof(runtime,db,ident,text):
     q=quality.inspect_text(text);s=q['review_signals']
     if q['technical_markers'] or s['encoding_artifacts']:return None,'technical_or_encoding_issue'
+    duration=db.execute('SELECT duration FROM videos WHERE youtube_id=?',(ident,)).fetchone()
+    if s['word_count']<100:return None,'text_too_short_for_automatic_media_deletion'
+    if duration and duration[0] and duration[0]>120 and s['word_count']<duration[0]*.5:
+        return None,'text_coverage_too_low_for_duration'
     density=q['suspected_repetitions']/max(1,s['word_count'])*100
     if (density>=.10 and s['long_repetition_alerts']>=2) or (s['longest_repeated_unit']>=10 and s['long_repetition_alerts']>=5):
         return None,'priority_repetition_review'

@@ -68,10 +68,12 @@ class CleanupTest(unittest.TestCase):
         self.runtime.archive.mkdir(parents=True);source=self.runtime.archive/'abcdefghijk.fr.vtt.gz';source.write_bytes(gzip.compress(raw))
         with core.closing_database(core.connect(self.runtime.db)) as db:
             db.execute('INSERT INTO pipeline_transcripts VALUES(?,?,?,?,?,?,?)',('abcdefghijk','fr','cached-captions',str(source),hashlib.sha256(raw).hexdigest(),core.CAPTION_VERSION,core.now()))
-            proof=cleanup.media_proof(self.runtime,db,'abcdefghijk','Bonjour le monde.')[0]
-            self.assertEqual(proof['source_kind'],'exact_final_text_not_timed_source')
-            q=cleanup.quality.inspect_text('Bonjour le monde.');q['status']='repetition_review'
+            self.assertIsNone(cleanup.media_proof(self.runtime,db,'abcdefghijk','Bonjour le monde.')[0])
+            q=cleanup.quality.inspect_text('Bonjour le monde.');q['review_signals']['word_count']=100
             with patch.object(cleanup.quality,'inspect_text',return_value=q):
+                proof=cleanup.media_proof(self.runtime,db,'abcdefghijk','Bonjour le monde.')[0]
+                self.assertEqual(proof['source_kind'],'exact_final_text_not_timed_source')
+                q['status']='repetition_review'
                 self.assertIsNotNone(cleanup.media_proof(self.runtime,db,'abcdefghijk','Bonjour le monde.')[0])
                 self.assertIsNone(cleanup.media_proof(self.runtime,db,'abcdefghijk','A different complete sentence.')[0])
                 source.write_bytes(gzip.compress(b'bad source'))

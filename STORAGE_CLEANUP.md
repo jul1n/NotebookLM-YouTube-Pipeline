@@ -40,8 +40,9 @@ restent conservées. Les cas sans correspondance restent en place.
 ## Git
 
 Ne jamais publier l'ancienne branche privée ni toutes les références. Avant de
-retirer son historique local : vérifier un bundle privé préservant tous les objets
-historiques non médias, y compris anciens textes, sous-titres et configuration ;
+retirer son historique local : vérifier un bundle privé préservant l'historique
+du code, des sources texte/sous-titres et de la configuration ; les anciens packs,
+exports de dashboard, métadonnées et exécutables générés sont exclus du bundle ;
 tester et publier les changements actuels sur main ; vérifier l'égalité avec
 origin/main. Le bundle et les preuves restent exclus de GitHub.
 

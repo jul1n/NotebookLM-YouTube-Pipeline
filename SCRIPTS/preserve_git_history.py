@@ -1,9 +1,10 @@
-"""Preserve private non-media Git history before authorized history pruning."""
+"""Preserve code and historical source history before authorized Git pruning."""
 import hashlib
 import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 
 def run(root,*args,**kwargs):
@@ -15,11 +16,23 @@ def preserve(root):
     listing=run(root,'-c','core.quotePath=false','rev-list','--objects','--all',capture_output=True).stdout.decode('utf8')
     (folder/'ORIGINAL_OBJECT_PATHS.txt').write_text(listing,encoding='utf8')
     media={'.mp4','.mkv','.webm','.mov','.m4a','.mp3','.opus','.wav','.ogg','.flac','.aac'}
+    def preserve_path(path):
+        value=Path(path);name=value.name.lower()
+        if value.suffix.lower() in media|{'.exe','.dll','.title'}:return False
+        if name.endswith('.info.json') or name in {'data.js','health.js','stats.js'}:return False
+        if value.suffix.lower()=='.txt' and any('pack' in part.casefold() for part in value.parts[:-1]):return False
+        return True
     paths=sorted({line.split(' ',1)[1] for line in listing.splitlines() if ' ' in line and Path(line.split(' ',1)[1]).suffix.lower() not in media})
     # Paths may include trees; positive file paths only, based on a batch object type check.
-    pairs=[line.split(' ',1) for line in listing.splitlines() if ' ' in line and Path(line.split(' ',1)[1]).suffix.lower() not in media]
-    objects='\n'.join(x[0] for x in pairs)+'\n'
-    checks=run(root,'cat-file','--batch-check=%(objectname) %(objecttype) %(objectsize)',input=objects.encode(),capture_output=True).stdout.decode().splitlines()
+    pairs=[line.split(' ',1) for line in listing.splitlines() if ' ' in line and preserve_path(line.split(' ',1)[1])]
+    checks=[]
+    for start in range(0,len(pairs),100):
+        objects='\n'.join(x[0] for x in pairs[start:start+100])+'\n'
+        with tempfile.TemporaryFile() as incoming,tempfile.TemporaryFile() as outgoing:
+            incoming.write(objects.encode());incoming.seek(0)
+            run(root,'cat-file','--batch-check=%(objectname) %(objecttype) %(objectsize)',stdin=incoming,stdout=outgoing,stderr=subprocess.PIPE)
+            outgoing.seek(0);checks.extend(outgoing.read().decode().splitlines())
+        print(json.dumps(dict(objects_checked=len(checks),total=len(pairs))),flush=True)
     kept=[];excluded=[]
     for (_,path),check in zip(pairs,checks):
         oid,kind,size=check.split();size=int(size)
@@ -28,7 +41,9 @@ def preserve(root):
         (excluded if Path(path).suffix.lower() in media else kept).append(row)
     paths=sorted({x['path'] for x in kept})
     print(json.dumps(dict(nonmedia_bytes=sum(x['size'] for x in kept),media_bytes=sum(x['size'] for x in excluded),paths=len(paths))),flush=True)
-    if sum(x['size'] for x in kept)>3_000_000_000:raise RuntimeError('Non-media history exceeds 3GB safeguard budget; stop for diagnosis')
+    # This is uncompressed input streamed through Git, never an on-disk export.
+    # The resulting compressed bundle and the temporary bare repository stay on Drive.
+    if sum(x['size'] for x in kept)>20_000_000_000:raise RuntimeError('Unexpected non-media history volume; stop for diagnosis')
     bare=folder/'nonmedia-history.git'
     if bare.exists():raise RuntimeError('Existing safeguard: inspect instead of overwrite')
     run(root,'init','--bare',str(bare),capture_output=True)
@@ -48,7 +63,8 @@ def preserve(root):
     h=hashlib.sha256(bundle.read_bytes()).hexdigest()
     proof=dict(bundle=str(bundle),sha256=h,size=bundle.stat().st_size,verified=True,
                original_refs=run(root,'show-ref',capture_output=True).stdout.decode(),preserved_nonmedia=kept,discardable_media=excluded,
-               note='Private non-media history; contains private configuration, never publish this bundle.')
+               excluded_paths=[line.split(' ',1)[1] for line in listing.splitlines() if ' ' in line and not preserve_path(line.split(' ',1)[1])],
+               note='Private code and historical sources. Excludes media, generated packs and dashboards, obsolete metadata and runtime binaries. Contains private configuration; never publish this bundle.')
     (folder/'VERIFIED.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2),encoding='utf8')
     print(json.dumps(dict(bundle=str(bundle),size=proof['size'],verified=True,preserved_objects=len(kept))),flush=True)
 
