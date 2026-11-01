@@ -205,7 +205,7 @@ def apply(runtime,target):
                         if not active or digest(active[0])!=rule['sha256']:raise RuntimeError('Concurrent edit in quality exclusion')
                         db.execute('INSERT OR IGNORE INTO pipeline_quality_exclusions VALUES(?,?,?,?,?)',
                                    (rule['youtube_id'],rule['sha256'],rule['reason'],json.dumps(rule,ensure_ascii=False),core.now()))
-            for item in result['entries']:
+            for entry_index,item in enumerate(result['entries']):
                 if not item['apply']:continue
                 ident=item['youtube_id']
                 if not core.VIDEO_ID.fullmatch(ident):raise ValueError('Invalid ID')
@@ -218,7 +218,9 @@ def apply(runtime,target):
                 if digest(current)!=item['before_sha']:raise RuntimeError('Concurrent edit: '+ident)
                 candidate=gzip.decompress((target/'candidates'/(ident+'.txt.gz')).read_bytes()).decode('utf8')
                 if digest(candidate)!=item['after_sha']:raise RuntimeError('Invalid candidate: '+ident)
-                runtime.check_space(128*1024**2)
+                # All originals/candidates are on Drive; avoid rescanning the entire
+                # local staging tree for every small SQLite transaction.
+                if entry_index%25==0:runtime.check_space(128*1024**2)
                 path=archive/f"{ident}.{item['before_sha']}.rendered.txt.gz"
                 if not path.exists():
                     temp=path.with_suffix('.gz.tmp');temp.write_bytes(gzip.compress(current.encode('utf8'),mtime=0));os.replace(temp,path)
