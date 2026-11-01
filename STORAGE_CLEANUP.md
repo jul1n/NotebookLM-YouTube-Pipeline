@@ -1,4 +1,20 @@
-# Réduction du stockage — 31 octobre 2026
+# Réduction du stockage — politique actualisée le 1er novembre 2026
+
+L'utilisateur autorise la suppression d'une vidéo quand une bonne transcription
+est conservée et sauvegardée, sans obligation de source horodatée. Aucun Whisper
+ni acquisition audio ne doit être lancé. L'absence de balises ne prouve pas le
+moteur de transcription ; la provenance inconnue reste explicitement inconnue.
+
+Le profil `short_oral_fillers_v1` accepte également les reprises intégralement
+classées comme hésitations courtes ou annotations, au maximum 1 % de mots
+concernés et deux alertes pour mille mots, sans répétition longue. Les phrases
+inexpliquées, encodages corrompus et textes manifestement trop courts restent
+bloquants. Ce contrôle automatique n'est pas une certification de fidélité à
+l'audio. La base et une sauvegarde vérifiée doivent contenir le même texte.
+
+Les sources compressées déjà disponibles restent conservées pour les traitements
+futurs, sans devenir un prérequis pour un texte validé. Les règles ci-dessous
+documentent également le premier nettoyage du 31 octobre.
 
 Les volumes de l'inventaire sont des tailles logiques sur Drive. Ils ne mesurent
 pas la place physique du cache Drive sur C:.

@@ -93,15 +93,24 @@ def media_proof(runtime,db,ident,text):
         return None,'priority_repetition_review'
     # User explicitly permits DB-only retention for already healthy texts. Keep an
     # additional tiny exact text copy, without presenting it as a timed source.
-    if q['status']=='no_heuristic_alert':
+    # No timestamps/source prerequisite under the user-approved text-only policy.
+    # Only sparse repetitions entirely classified as short fillers/annotations
+    # may pass automatically; unexplained phrases remain blocked.
+    oral_profile=(runtime.policy.get('deletion_requires_reprocessable_source') is False
+                  and runtime.policy.get('media_text_quality_profile')=='short_oral_fillers_v1')
+    explained=s['short_filler_alerts']+s['nonverbal_only_alerts']
+    sparse_oral=(oral_profile and q['suspected_repetitions']>0 and explained==q['suspected_repetitions']
+                 and s['long_repetition_alerts']==0 and s['repeated_word_fraction']<=.01 and density<=.2)
+    if q['status']=='no_heuristic_alert' or sparse_oral:
         sha=digest(text);folder=runtime.root/'WORKING_ZONE/_VERIFIED_TEXT_GZ';folder.mkdir(parents=True,exist_ok=True)
         archive=folder/f'{ident}.{sha}.txt.gz'
         if not archive.exists():archive.write_bytes(gzip.compress(text.encode('utf8'),mtime=0))
         if hashlib.sha256(gzip.decompress(archive.read_bytes())).hexdigest()!=sha:raise ValueError('Text safeguard mismatch')
         return dict(raw_path=str(archive),raw_sha256=sha,text_sha256=sha,quality=q,
-                    source_kind='exact_final_text_not_timed_source',cleaner_version=core.CAPTION_VERSION),'healthy_database_text_and_backup'
+                    source_kind='exact_final_text_not_timed_source',quality_profile='short_oral_fillers_v1' if sparse_oral else 'no_heuristic_alert',
+                    cleaner_version=core.CAPTION_VERSION),'healthy_database_text_and_backup'
     record=db.execute('SELECT * FROM pipeline_transcripts WHERE youtube_id=?',(ident,)).fetchone()
-    if not record:return None,'missing_canonical_timed_source'
+    if not record:return None,'unexplained_repetitions_require_review' if oral_profile else 'missing_canonical_timed_source'
     source=Path(record['raw_path'])
     legacy=runtime.root/'WORKING_ZONE/_LEGACY_RENDERED_GZ'
     if source.resolve().is_relative_to(legacy.resolve()) and source.name.endswith('.rendered.txt.gz'):
@@ -153,7 +162,7 @@ def prepare(runtime,target,inventory):
             if len(eligible) and len(eligible)%500==0:print(json.dumps({'eligible':len(eligible)}),flush=True)
     totals=Counter();counts=Counter()
     for x in eligible:totals[x['category']]+=x['size_bytes'];counts[x['category']]+=1
-    result=dict(created_at=core.now(),authorization='User 2026-10-31: preliminary and necessary steps to delete proposed 278GB; only proven eligible files',
+    result=dict(created_at=core.now(),authorization='User-approved verified storage cleanup; eligibility rechecked against the current policy',policy_snapshot=dict(runtime.policy),
                 root=str(runtime.root),database=str(runtime.db),backup=str(backup),backup_proof=backup_proof,
                 totals=dict(totals),counts=dict(counts),held_bytes=dict(held),entries=eligible,network_calls=0)
     core.atomic_json(target/'DELETE_PLAN.json',result)

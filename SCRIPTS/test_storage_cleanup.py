@@ -79,6 +79,24 @@ class CleanupTest(unittest.TestCase):
                 source.write_bytes(gzip.compress(b'bad source'))
                 self.assertIsNone(cleanup.media_proof(self.runtime,db,'abcdefghijk','Bonjour le monde.')[0])
 
+    def test_text_only_policy_accepts_sparse_fillers_without_caption_source(self):
+        self.runtime.policy.update(deletion_requires_reprocessable_source=False,media_text_quality_profile='short_oral_fillers_v1')
+        body='you know you know you know '+' '.join(f'word{i}' for i in range(2000))
+        with core.closing_database(core.connect(self.runtime.db)) as db:
+            proof,reason=cleanup.media_proof(self.runtime,db,'abcdefghijk',body)
+            self.assertIsNotNone(proof);self.assertEqual(proof['quality_profile'],'short_oral_fillers_v1')
+            self.assertTrue(Path(proof['raw_path']).exists())
+            self.runtime.policy={}
+            self.assertIsNone(cleanup.media_proof(self.runtime,db,'abcdefghijk',body)[0])
+
+    def test_text_only_policy_keeps_unexplained_phrases_and_dense_loops(self):
+        self.runtime.policy.update(deletion_requires_reprocessable_source=False,media_text_quality_profile='short_oral_fillers_v1')
+        tail=' '.join(f'word{i}' for i in range(2000))
+        with core.closing_database(core.connect(self.runtime.db)) as db:
+            proof,reason=cleanup.media_proof(self.runtime,db,'abcdefghijk','most people think most people think '+tail)
+            self.assertIsNone(proof);self.assertEqual(reason,'unexplained_repetitions_require_review')
+            self.assertIsNone(cleanup.media_proof(self.runtime,db,'abcdefghijk',('you know '*500)+tail)[0])
+
     def test_legacy_requires_complete_varied_triplicates_and_matching_text(self):
         units=[' '.join(f'word{n}_{k}' for k in range(6)) for n in range(30)]
         raw=' '.join(unit+' '+unit+' '+unit for unit in units).encode('utf8');text=' '.join(units)
