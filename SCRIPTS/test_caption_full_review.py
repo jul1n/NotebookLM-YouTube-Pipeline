@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 import caption_deep_encoding as deep
 import caption_encoding_repair as encoding
@@ -16,6 +17,23 @@ import pipeline_core as core
 
 class DeepReviewTest(unittest.TestCase):
     def mapping(self,old,new):return [dict(before=old,after=new,occurrences=12,independent_videos=['a','b','c'])]
+
+    def test_parallel_source_reads_keep_the_shared_budget_exact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'DATABASE').mkdir();baseline=root/'audit.json';baseline.write_text('{"flagged":[],"transcript_hashes":{}}')
+            inventory=root/'inventory';inventory.write_text('');index=root/'index';index.write_text('[]')
+            reader=review.Review(core.Runtime(root),root/'DATABASE/pilot_reports/test',baseline,inventory,index);reader.read_limit=35
+            paths=[]
+            for i in range(4):
+                path=root/f'source{i}.txt';path.write_bytes(b'1234567890abcdef');paths.append(path)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures=[pool.submit(reader.read_uncached,path,True) for path in paths]
+                successful=0
+                for future in futures:
+                    try:future.result();successful+=1
+                    except ValueError:pass
+            self.assertEqual(successful,2);self.assertEqual(reader.read_bytes,32)
+            self.assertEqual(json.loads(reader.budget_path.read_text())['source_bytes_read'],32)
 
     def test_single_demonstrated_quote_is_restored(self):
         result,proof=deep.restore('Today Ôòùû▓hello.',self.mapping('Ôòùû▓',"'"))

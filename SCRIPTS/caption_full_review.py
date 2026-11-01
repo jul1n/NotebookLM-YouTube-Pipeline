@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import threading
 import unicodedata
 
 import caption_deep_encoding as deep
@@ -59,15 +60,22 @@ class Review:
         self.audit=json.loads(baseline.read_text(encoding='utf8'));self.flags={x['youtube_id']:x['quality'] for x in self.audit['flagged']}
         self.inventory=inventory;self.old_index=old_index;self.records={};self.entries={};self.observations=[]
         self.read_bytes=0;self.read_limit=4_000_000_000;self.index=defaultdict(list);self.aliases=[]
+        self.read_lock=threading.Lock();self.input_futures={}
         self.budget_path=runtime.work/('full-review-'+hashlib.sha256(str(target).encode()).hexdigest()[:12]+'.json')
         runtime.work.mkdir(parents=True,exist_ok=True)
         if self.budget_path.exists():self.read_bytes=json.loads(self.budget_path.read_text())['source_bytes_read']
 
     def read(self,path):
+        future=self.input_futures.pop(str(path),None)
+        return future.result() if future is not None else self.read_uncached(path)
+
+    def read_uncached(self,path,caption=False):
         size=path.stat().st_size
-        if size>128_000_000 or self.read_bytes+size>self.read_limit:raise ValueError('source_read_budget')
-        self.read_bytes+=size
-        core.atomic_json(self.budget_path,dict(source_bytes_read=self.read_bytes))
+        if size>(8_000_000 if caption else 128_000_000):raise ValueError('source_too_large')
+        with self.read_lock:
+            if self.read_bytes+size>self.read_limit:raise ValueError('source_read_budget')
+            self.read_bytes+=size
+            core.atomic_json(self.budget_path,dict(source_bytes_read=self.read_bytes))
         data=path.read_bytes()
         if path.suffix=='.gz':data=gzip.decompress(data)
         if len(data)>128_000_000:raise ValueError('decoded_source_too_large')
@@ -85,9 +93,9 @@ class Review:
         language=language if re.fullmatch(r'[A-Za-z0-9_-]{1,20}',language or '') else 'und'
         extension='vtt' if raw.lstrip().startswith(b'WEBVTT') else 'srt' if timed else 'txt'
         folder=self.runtime.archive if timed else self.runtime.root/'WORKING_ZONE/_TEXT_SOURCES_GZ'
-        folder.mkdir(parents=True,exist_ok=True);archive=folder/f'{ident}.{sha}.{language}.{extension}.gz'
+        archive=folder/f'{ident}.{sha}.{language}.{extension}.gz'
         staged=self.stage/'sources'/folder.name/archive.name;staged.parent.mkdir(exist_ok=True)
-        actual=archive if archive.exists() else staged
+        actual=staged
         if not actual.exists():actual.write_bytes(gzip.compress(raw,mtime=0))
         if hashlib.sha256(gzip.decompress(actual.read_bytes())).hexdigest()!=sha:raise RuntimeError('Source checksum mismatch')
         item['timed_source' if timed else 'local_text_source']=dict(raw_path=str(archive),sha256=sha,language=language)
@@ -253,11 +261,21 @@ class Review:
             if not prepass_done:self.json_sources(db,ids);self.learn_encoding(db,ids)
             core.atomic_json(self.target/'PREPASS_DONE.json',dict(complete=True,resumed=prepass_done,source_bytes_read=self.read_bytes))
             ordered=sorted(ids,key=lambda ident:(ident not in self.entries,ident))
+            ordered=[ident for ident in ordered if not (ident in self.records and 'result' in self.records[ident])]
+            languages={row['youtube_id']:(row['lang_config'] or 'und').split('-')[0] for row in db.execute('SELECT v.youtube_id,c.lang_config FROM videos v JOIN channels c ON c.id=v.channel_id')}
+            def choices_for(ident):
+                preferred=languages.get(ident,'und')
+                return sorted(self.index.get(ident,[]),key=lambda x:(not x[0].lower().endswith(('.vtt','.srt','.vtt.gz','.srt.gz')),0 if x[1].split('-')[0]==preferred else 1 if x[1]=='und' else 2,'orig' not in x[1],x[0]))
             examined=sum(ident in self.records and 'result' in self.records[ident] for ident in ids)
             journal=(self.stage/'reviews.jsonl').open('a',encoding='utf8',newline='\n')
+            input_pool=ThreadPoolExecutor(max_workers=4)
             try:
-              for ident in ordered:
+              for ordinal,ident in enumerate(ordered):
                 if ident in self.records and 'result' in self.records[ident]:continue
+                for upcoming in ordered[ordinal:ordinal+4]:
+                    first=choices_for(upcoming)
+                    if upcoming not in self.entries and first and first[0][0] not in self.input_futures:
+                        self.input_futures[first[0][0]]=input_pool.submit(self.read_uncached,Path(first[0][0]),True)
                 examined+=1
                 row=db.execute('SELECT v.youtube_id,v.title,v.transcript,c.prefix AS channel,c.lang_config FROM videos v JOIN channels c ON c.id=v.channel_id WHERE youtube_id=?',(ident,)).fetchone()
                 old=row['transcript'];q=self.quality(ident,old);tried=[];result='unresolved_no_matching_local_source'
@@ -268,7 +286,7 @@ class Review:
                         item=source.entry(row,old,candidate,q,'short_systemic_triplicates',evidence) if evidence['accepted'] else None
                         if item:self.save(item,candidate);result='repair_prepared'
                     if ident not in self.entries:
-                        choices=sorted(self.index.get(ident,[]),key=lambda x:(not x[0].endswith(('.vtt','.srt','.vtt.gz','.srt.gz')),x[0]))
+                        choices=choices_for(ident)
                         for name,language in choices:
                             path=Path(name)
                             try:
@@ -286,12 +304,17 @@ class Review:
                 record=dict(youtube_id=ident,channel=row['channel'],title=row['title'],text_sha256=maintenance.digest(old),quality=q,result=result,sources_tried=tried,
                             json_sources=self.records.get(ident,{}).get('json_sources',[]))
                 self.records[ident]=record;journal.write(json.dumps(record,ensure_ascii=False)+'\n');journal.flush()
+                first=choices_for(ident)
+                if first:
+                    unused=self.input_futures.pop(first[0][0],None)
+                    if unused is not None:unused.cancel()
                 if examined%100==0:
                     os.fsync(journal.fileno())
                     self.runtime.check_space(128*1024**2)
-                    core.atomic_json(self.target/'PROGRESS.json',dict(examined=examined,total=len(ordered),repairs=len(self.entries),source_bytes_read=self.read_bytes))
-                    print(json.dumps(dict(examined=examined,total=len(ordered),repairs=len(self.entries),source_bytes_read=self.read_bytes)),flush=True)
-            finally:journal.close()
+                    core.atomic_json(self.target/'PROGRESS.json',dict(examined=examined,total=len(ids),repairs=len(self.entries),source_bytes_read=self.read_bytes))
+                    print(json.dumps(dict(examined=examined,total=len(ids),repairs=len(self.entries),source_bytes_read=self.read_bytes)),flush=True)
+            finally:
+                input_pool.shutdown(wait=True,cancel_futures=True);self.input_futures.clear();journal.close()
             self.publish()
         plan=dict(version=maintenance.VERSION,created_at=core.now(),database=str(self.runtime.db),source_cleaner=core.CAPTION_VERSION,
                   entries=list(self.entries.values()),changes=len(self.entries),counts=dict(Counter(x['category'] for x in self.entries.values())),

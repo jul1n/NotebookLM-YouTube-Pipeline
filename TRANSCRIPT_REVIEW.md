@@ -14,6 +14,9 @@ Les candidats et décisions de travail sont préparés dans le cache local, puis
 publiés sur Drive avec contrôle d'empreinte et quatre copies simultanées au plus.
 Une reprise recharge les décisions et candidats vérifiés, sans recommencer la
 lecture des exports JSON ni remettre à zéro le compteur de lecture.
+Les prochaines lectures sont anticipées par un petit groupe de tâches d'entrée/
+sortie ; elles partagent le même compteur de volume protégé contre les accès
+concurrents. Aucun traitement réseau YouTube n'est ajouté.
 
 `caption_review_finalize.py` vérifie les empreintes, contrôle les nombres et les
 négations des remplacements depuis une source, et enrichit les correspondances
