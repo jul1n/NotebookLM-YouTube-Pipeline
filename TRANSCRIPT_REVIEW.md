@@ -41,7 +41,7 @@ Une concordance avec des sous-titres ne certifie pas leur fidélité à l'audio.
 
 ## Déduplication des reprises orales autorisée le 1er novembre 2026
 
-L’utilisateur accepte que les tics de langage, reprises et répétitions d’emphase soient retirés. `caption_spoken_dedup.py` retire les copies immédiatement adjacentes de mots ou groupes de mots (jusqu’à 128 mots), en comparant les mots sans tenir compte de leur casse ni de la ponctuation. Il conserve une occurrence, sans réécrire le vocabulaire, sans fusionner des passages éloignés et sans supprimer les groupes contenant des chiffres. Les nombres sont revérifiés et le résultat doit être idempotent. Une boucle déjà exclue pour absence de parole exploitable reste exclue.
+L’utilisateur accepte que les tics de langage, reprises et répétitions d’emphase soient retirés. `caption_spoken_dedup.py` retire les copies immédiatement adjacentes de mots ou groupes de mots (jusqu’à 128 mots), en comparant les mots sans tenir compte de leur casse ni de la ponctuation. Il conserve une occurrence, sans réécrire le vocabulaire, sans fusionner des passages éloignés et sans supprimer les groupes contenant des chiffres. Les doubles grammaticaux « nous nous », « vous vous », « had had », « that that » et les doubles négations « not not », « pas pas » restent protégés. Les nombres sont revérifiés et le résultat doit être idempotent. Une boucle déjà exclue pour absence de parole exploitable reste exclue.
 
 Le plan contient les empreintes avant/après, le nombre de copies retirées et des exemples. L’application utilise le même journal de révision réversible et les mêmes sauvegardes, contrôles SQLite/FTS, audit complet et exports que les corrections de sources. Les sous-titres bruts ne sont pas modifiés. Aucun audio ni réseau.
 

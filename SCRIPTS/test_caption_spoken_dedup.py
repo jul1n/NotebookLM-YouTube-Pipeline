@@ -12,6 +12,11 @@ class SpokenDedupTest(unittest.TestCase):
     def test_numbers_preserved(self):
         for text in ['1 1 1', 'In 2020 in 2020 sales rose.', '10.10 10.10']:
             self.assertEqual(deduplicate(text)[0],text)
+    def test_grammatical_doubles(self):
+        for text in ['Nous nous sommes vus.', 'Vous vous souvenez.', 'I had had enough.', 'I think that that works.', 'It is not not true.']:
+            self.assertEqual(deduplicate(text)[0],text)
+        self.assertEqual(deduplicate('Nous nous sommes vus nous nous sommes vus hier.')[0],'Nous nous sommes vus hier.')
+
     def test_nonadjacent_and_different_words(self):
         for text in ['I want this but I want that.', 'I do not agree. I agree.', 'Bonjour tout le monde.']:
             self.assertEqual(deduplicate(text)[0],text)

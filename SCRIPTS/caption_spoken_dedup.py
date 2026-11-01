@@ -10,7 +10,10 @@ import caption_quality as quality
 import caption_maintenance as maintenance
 import pipeline_core as core
 
-VERSION='adjacent-spoken-repetitions-v1'
+VERSION='adjacent-spoken-repetitions-v2'
+# Reflexive pronouns, grammatical double verbs/determiners and logical negation
+# can be consecutive without expressing a repeated utterance.
+GRAMMATICAL_DOUBLES={'nous','vous','had','that','not','pas'}
 
 def deduplicate(text,max_unit=128):
     tokens=list(quality.TOKEN.finditer(text));stack=[];positions={};spans=[];examples=[];removed=0;events=0
@@ -22,6 +25,7 @@ def deduplicate(text,max_unit=128):
                 width=end-1-previous
                 if width>max_unit:break
                 if 2*width>end:continue
+                if width==1 and stack[-1][0] in GRAMMATICAL_DOUBLES:continue
                 left=stack[end-2*width:end-width];right=stack[end-width:]
                 if all(a[0]==b[0] for a,b in zip(left,right)) and not any(any(c.isdigit() for c in value[0]) for value in right):
                     found=width;break
