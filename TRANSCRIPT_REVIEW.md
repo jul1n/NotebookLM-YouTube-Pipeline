@@ -38,3 +38,15 @@ vérifiée avant/après, les contrôles SQLite/FTS, un audit final, puis la rég
 des packs et du dashboard. Les rapports privés distinguent les corrections,
 les sources concordantes, les hésitations reconnues et les cas encore indécidables.
 Une concordance avec des sous-titres ne certifie pas leur fidélité à l'audio.
+
+## Déduplication des reprises orales autorisée le 1er novembre 2026
+
+L’utilisateur accepte que les tics de langage, reprises et répétitions d’emphase soient retirés. `caption_spoken_dedup.py` retire les copies immédiatement adjacentes de mots ou groupes de mots (jusqu’à 128 mots), en comparant les mots sans tenir compte de leur casse ni de la ponctuation. Il conserve une occurrence, sans réécrire le vocabulaire, sans fusionner des passages éloignés et sans supprimer les groupes contenant des chiffres. Les nombres sont revérifiés et le résultat doit être idempotent. Une boucle déjà exclue pour absence de parole exploitable reste exclue.
+
+Le plan contient les empreintes avant/après, le nombre de copies retirées et des exemples. L’application utilise le même journal de révision réversible et les mêmes sauvegardes, contrôles SQLite/FTS, audit complet et exports que les corrections de sources. Les sous-titres bruts ne sont pas modifiés. Aucun audio ni réseau.
+
+```powershell
+python SCRIPTS/caption_spoken_dedup.py --target DATABASE/pilot_reports/spoken-dedup-20261101 --apply
+```
+
+Une relance du même plan reprend les corrections déjà journalisées sans les dupliquer. Le fichier DONE.json indique la fin des contrôles et des exports.

@@ -23,8 +23,7 @@ def deduplicate(text,max_unit=128):
                 if width>max_unit:break
                 if 2*width>end:continue
                 left=stack[end-2*width:end-width];right=stack[end-width:]
-                if any(any(c.isdigit() for c in value[0]) for value in right):continue
-                if all(a[0]==b[0] for a,b in zip(left,right)):
+                if all(a[0]==b[0] for a,b in zip(left,right)) and not any(any(c.isdigit() for c in value[0]) for value in right):
                     found=width;break
             if not found:break
             retained=stack[-found-1][1];last=stack[-1][1]
