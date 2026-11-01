@@ -10,6 +10,10 @@ compteur persiste dans le cache local et n'est pas remis à zéro après un arr�
 Les propositions restent séparées de la base. Une copie compressée de chaque
 source acceptée et chaque original modifié est conservée. Une source TXT/JSON
 est étiquetée comme telle, sans lui attribuer des horodatages.
+Les candidats et décisions de travail sont préparés dans le cache local, puis
+publiés sur Drive avec contrôle d'empreinte et quatre copies simultanées au plus.
+Une reprise recharge les décisions et candidats vérifiés, sans recommencer la
+lecture des exports JSON ni remettre à zéro le compteur de lecture.
 
 `caption_review_finalize.py` vérifie les empreintes, contrôle les nombres et les
 négations des remplacements depuis une source, et enrichit les correspondances

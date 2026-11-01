@@ -2,6 +2,7 @@
 import argparse
 from bisect import bisect_right
 from collections import Counter
+from functools import lru_cache
 import difflib
 import gzip
 import hashlib
@@ -19,14 +20,19 @@ CORRUPTION=re.compile(r'\ufffd|Ôò|Ôö|û[▓╣┬│]|[┬├][\x80-\uFFFF]'
 ASCII_WORD=re.compile(r"[a-z]+(?:'[a-z]+)?")
 
 
-def anchors(text):
+@lru_cache(maxsize=8)
+def _cached_anchors(text):
     result=[]
     for token in text.replace('’',"'").split():
         if CORRUPTION.search(token):continue
         word=''.join(c for c in unicodedata.normalize('NFKD',token) if not unicodedata.combining(c))
         word=word.strip('.,!?;:"()[]{}-').casefold()
         if len(word)>=4 and ASCII_WORD.fullmatch(word):result.append(word)
-    return result
+    return tuple(result)
+
+
+def anchors(text):
+    return list(_cached_anchors(text))
 
 
 def concordance(before,after):

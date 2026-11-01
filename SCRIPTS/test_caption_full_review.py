@@ -79,6 +79,10 @@ class DeepReviewTest(unittest.TestCase):
             item=plan['entries'][0];self.assertIn('local_text_source',item);self.assertNotIn('timed_source',item)
             self.assertTrue(item['local_text_source']['raw_path'].endswith('.txt.gz'))
             self.assertEqual(gzip.decompress((target/'candidates/abcdefghijk.txt.gz').read_bytes()).decode(),clean)
+            budget=json.loads((runtime.work/('full-review-'+__import__('hashlib').sha256(str(target).encode()).hexdigest()[:12]+'.json')).read_text())['source_bytes_read']
+            review.Review(runtime,target,baseline,inventory,index).run()
+            self.assertEqual(json.loads((target/'PLAN.json').read_text(encoding='utf8'))['changes'],1)
+            self.assertEqual(json.loads((runtime.work/('full-review-'+__import__('hashlib').sha256(str(target).encode()).hexdigest()[:12]+'.json')).read_text())['source_bytes_read'],budget)
             finalize.finalize(runtime,target)
             self.assertEqual(json.loads((target/'PLAN_VALIDATED.json').read_text(encoding='utf8'))['changes'],1)
             with core.closing_database(core.connect(path,True)) as db:self.assertEqual(db.execute('SELECT transcript FROM videos').fetchone()[0],old)
