@@ -12,5 +12,7 @@
   "audio_transcription_mode": "deferred",
   "deletion_requires_reprocessable_source": false,
   "media_text_quality_profile": "short_oral_fillers_v1",
-  "deletion_requires_quality_review": true
+  "deletion_requires_quality_review": true,
+  "spoken_repetition_policy": "remove_adjacent_exact_repetitions_including_tics_and_emphasis",
+  "spoken_repetition_preserve_numeric_content": true
 }
