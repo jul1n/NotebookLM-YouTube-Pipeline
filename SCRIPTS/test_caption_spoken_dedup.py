@@ -17,6 +17,10 @@ class SpokenDedupTest(unittest.TestCase):
             self.assertEqual(deduplicate(text)[0],text)
         self.assertEqual(deduplicate('Nous nous sommes vus nous nous sommes vus hier.')[0],'Nous nous sommes vus hier.')
 
+    def test_operators_are_meaningful(self):
+        for text in ['x + x', 'C C++', 'A - A', 'x / x', 'x = x', 'A < A']:
+            self.assertEqual(deduplicate(text)[0],text)
+
     def test_nonadjacent_and_different_words(self):
         for text in ['I want this but I want that.', 'I do not agree. I agree.', 'Bonjour tout le monde.']:
             self.assertEqual(deduplicate(text)[0],text)
