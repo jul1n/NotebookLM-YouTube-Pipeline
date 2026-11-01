@@ -40,7 +40,7 @@ def allowed_artifact(old,new):
     return bool(source.CORRUPTION.search(old) or re.search(r'[ÃÂûÔ├┬]',old))
 
 
-def pair_artifacts(before,after,max_windows=500):
+def pair_artifacts(before,after,max_windows=500,predicate=None):
     a,b=positioned_anchors(before),positioned_anchors(after)
     common={x[0] for x in a}&{x[0] for x in b}
     a=[x for x in a if x[0] in common];b=[x for x in b if x[0] in common]
@@ -53,7 +53,7 @@ def pair_artifacts(before,after,max_windows=500):
             if old==new or len(old)>4000 or len(new)>300:continue
             windows+=1
             for tag,start,end,left,right in difflib.SequenceMatcher(None,old,new,autojunk=False).get_opcodes():
-                if tag in {'replace','delete'} and allowed_artifact(old[start:end],new[left:right]):
+                if tag in {'replace','delete'} and (predicate or allowed_artifact)(old[start:end],new[left:right]):
                     found[(old[start:end],new[left:right])]+=1
             if windows>=max_windows:return found
     return found

@@ -21,6 +21,7 @@ def kind(path,root):
     if name.endswith(('-wal','-shm','-journal')):return 'sqlite_journal_protected'
     if path.suffix.lower() in MEDIA:return 'media'
     if '_captions_gz' in parts:return 'canonical_timed_source_protected'
+    if '_text_sources_gz' in parts or '_verified_text_gz' in parts:return 'canonical_text_source_protected'
     if '_legacy_rendered_gz' in parts:return 'revision_original_protected'
     if path.suffix.lower() in {'.db','.sqlite','.sqlite3'}:return 'database'
     if 'snapshots' in parts or name.endswith('.verified.json'):return 'backup_protected'

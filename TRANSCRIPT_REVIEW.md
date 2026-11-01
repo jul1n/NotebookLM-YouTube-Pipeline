@@ -1,0 +1,33 @@
+# Revue complète des transcriptions douteuses
+
+`caption_full_review.py` examine tous les signalements, y compris les répétitions
+rares. Il consulte les sources VTT/SRT, les exports TXT et les exports JSON locaux
+identifiés par vidéo. Les noms sans identifiant peuvent être rapprochés d'un titre
+unique, puis leur contenu doit confirmer la correspondance. Aucun accès YouTube,
+audio ou Whisper n'est utilisé. La lecture des sources est bornée à 4 Go ; le
+compteur persiste dans le cache local et n'est pas remis à zéro après un arrêt.
+
+Les propositions restent séparées de la base. Une copie compressée de chaque
+source acceptée et chaque original modifié est conservée. Une source TXT/JSON
+est étiquetée comme telle, sans lui attribuer des horodatages.
+
+`caption_review_finalize.py` vérifie les empreintes, contrôle les nombres et les
+négations des remplacements depuis une source, et enrichit les correspondances
+d'encodage depuis des couples de textes/sources déjà vérifiés. Chaque substitution
+de caractère doit être démontrée dans au moins trois vidéos indépendantes, avec
+au moins dix occurrences et sans cible contradictoire. Les rares lettres ASCII
+porteuses d'un encodage imbriqué sont comptabilisées ; les chiffres et le texte
+hors de ces séquences restent inchangés. Les réparations partielles dont des
+marqueurs d'encodage subsistent sont rejetées.
+
+Une restauration depuis une source horodatée peut rétablir des mots perdus par
+un ancien nettoyage, même si elle réintroduit des hésitations réellement présentes
+dans les sous-titres. Elle exige une concordance lexicale renforcée, la préservation
+des nombres et négations, et l'absence de nouvelles répétitions longues. Les
+répétitions isolées dans une prose sans preuve de format restent conservées.
+
+L'application utilise le journal réversible `pipeline_revisions`, une sauvegarde
+vérifiée avant/après, les contrôles SQLite/FTS, un audit final, puis la régénération
+des packs et du dashboard. Les rapports privés distinguent les corrections,
+les sources concordantes, les hésitations reconnues et les cas encore indécidables.
+Une concordance avec des sous-titres ne certifie pas leur fidélité à l'audio.

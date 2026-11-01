@@ -76,7 +76,16 @@ class MaintenanceTest(unittest.TestCase):
     def test_linking_source_does_not_rewrite_the_transcript(self):
         self._exercise_apply(timed_source=True,metadata_only=True)
 
-    def _exercise_apply(self,timed_source=False,invalid_source=False,metadata_only=False):
+    def test_plain_text_source_has_correct_provenance(self):
+        self._exercise_apply(text_source=True)
+
+    def test_plain_text_source_metadata_only_is_idempotent(self):
+        self._exercise_apply(text_source=True,metadata_only=True)
+
+    def test_invalid_plain_text_source_rolls_back(self):
+        self._exercise_apply(text_source=True,invalid_source=True)
+
+    def _exercise_apply(self,timed_source=False,invalid_source=False,metadata_only=False,text_source=False):
         from contextlib import ExitStack
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);(root/'DATABASE').mkdir()
@@ -99,13 +108,13 @@ class MaintenanceTest(unittest.TestCase):
                 (target/'candidates').mkdir(exist_ok=True)
                 (target/'candidates/abcdefghijk.txt.gz').write_bytes(gzip.compress(original.encode(),mtime=0))
                 core.atomic_json(target/'PLAN.json',data)
-            if timed_source:
+            if timed_source or text_source:
                 runtime.archive.mkdir(parents=True)
-                source_path=runtime.archive/'abcdefghijk.fr.vtt.gz'
-                raw=b'WEBVTT\n\n00:00.000 --> 00:01.000\nThis is the spoken text.'
+                source_path=runtime.archive/('abcdefghijk.fr.txt.gz' if text_source else 'abcdefghijk.fr.vtt.gz')
+                raw=b'This is the spoken text.' if text_source else b'WEBVTT\n\n00:00.000 --> 00:01.000\nThis is the spoken text.'
                 source_path.write_bytes(gzip.compress(raw,mtime=0))
                 data=json.loads((target/'PLAN.json').read_text(encoding='utf8'))
-                data['entries'][0]['timed_source']=dict(raw_path=str(source_path),language='en',sha256='invalid' if invalid_source else __import__('hashlib').sha256(raw).hexdigest())
+                data['entries'][0]['local_text_source' if text_source else 'timed_source']=dict(raw_path=str(source_path),language='en',sha256='invalid' if invalid_source else __import__('hashlib').sha256(raw).hexdigest())
                 core.atomic_json(target/'PLAN.json',data)
             with ExitStack() as stack:
                 for name in ('backup','packs'):stack.enter_context(patch.object(core,name))
@@ -126,7 +135,8 @@ class MaintenanceTest(unittest.TestCase):
                 rows=db.execute('SELECT * FROM pipeline_revisions').fetchall()
                 self.assertEqual(len(rows),1)
                 self.assertEqual(gzip.decompress(Path(rows[0]['original_gzip']).read_bytes()).decode(),original)
-                self.assertEqual(db.execute('SELECT raw_path FROM pipeline_transcripts').fetchone()[0],str(source_path) if timed_source else 'source.vtt.gz')
+                self.assertEqual(db.execute('SELECT raw_path FROM pipeline_transcripts').fetchone()[0],str(source_path) if timed_source or text_source else 'source.vtt.gz')
+                if text_source:self.assertEqual(db.execute('SELECT source FROM pipeline_transcripts').fetchone()[0],'verified-local-text-source')
                 self.assertEqual(json.loads(rows[0]['old_metadata'])['sha256'],'rawhash')
                 self.assertEqual(db.execute('SELECT n FROM body_updates').fetchone()[0],0 if metadata_only else 1)
 

@@ -30,7 +30,7 @@ def checked_path(root, item):
     path=Path(item['path'])
     if not path.is_absolute() or path.is_symlink() or not path.resolve().is_relative_to(resolved_root(root)):
         raise ValueError('Path outside approved repository or symlink')
-    if any(p.casefold() in {'.git','_captions_gz','_legacy_rendered_gz','_verified_text_gz','snapshots'} for p in path.relative_to(root).parts):
+    if any(p.casefold() in {'.git','_captions_gz','_text_sources_gz','_legacy_rendered_gz','_verified_text_gz','snapshots'} for p in path.relative_to(root).parts):
         raise ValueError('Protected directory')
     if path.name.lower().endswith(('-wal','-shm','-journal')):
         raise ValueError('SQLite journal protected')

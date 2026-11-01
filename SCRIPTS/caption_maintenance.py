@@ -162,6 +162,7 @@ def report(target,result,applied=None):
                 completed_systemic_triplicates='Reconstruction complète depuis un original à triples copies',short_systemic_triplicates='Formats courts à triples copies variées',verified_local_timed_source='Reconstruction depuis une source horodatée locale concordante',demonstrated_encoding_restoration='Caractères restaurés par correspondances indépendamment démontrées',verified_source_archival_only='Source horodatée archivée et reliée au texte déjà concordant',
                 partial_triplicates_needs_source='Triples copies partielles : source à examiner',frequent_repetitions_unconfirmed='Répétitions nombreuses, origine non confirmée',
                 isolated_repetitions_unconfirmed='Répétitions moins nombreuses, origine non confirmée',unresolved_markup='Marqueurs techniques non résolus',candidate_rejected='Candidat rejeté par les contrôles')
+    labels.update(verified_local_text_source='Texte restauré depuis un export local identifié',verified_source_restoration='Contenu rétabli depuis des sous-titres complets',demonstrated_deep_encoding_restoration='Encodage restauré depuis des correspondances de caractères vérifiées')
     for name,count in result['counts'].items():text+=f'- {labels.get(name,name)} : {count}\n'
     if result.get('source_cleaner'):
         text+='\nLes sources horodatées concordantes sont retraitées en distinguant les nouvelles paroles des lignes maintenues à l’écran. Les anciens triples rendus variés peuvent être reconstruits entièrement : couverture de 98 %, au moins 25 groupes, 20 unités distinctes et 20 groupes longs. Les répétitions à l’intérieur d’une unité conservée restent intactes ; une boucle uniforme ne prouve pas ce format.\n'
@@ -210,7 +211,8 @@ def apply(runtime,target):
                 if digest(current)==item['after_sha']:
                     if not item.get('metadata_only'):continue
                     present=db.execute('SELECT raw_path,sha256 FROM pipeline_transcripts WHERE youtube_id=?',(ident,)).fetchone()
-                    if present and present['raw_path']==item['timed_source']['raw_path'] and present['sha256']==item['timed_source']['sha256']:continue
+                    artifact=item.get('timed_source') or item.get('local_text_source')
+                    if artifact and present and present['raw_path']==artifact['raw_path'] and present['sha256']==artifact['sha256']:continue
                 if digest(current)!=item['before_sha']:raise RuntimeError('Concurrent edit: '+ident)
                 candidate=gzip.decompress((target/'candidates'/(ident+'.txt.gz')).read_bytes()).decode('utf8')
                 if digest(candidate)!=item['after_sha']:raise RuntimeError('Invalid candidate: '+ident)
@@ -226,12 +228,13 @@ def apply(runtime,target):
                     if candidate!=current and db.execute('UPDATE videos SET transcript=? WHERE youtube_id=? AND transcript=?',(candidate,ident,current)).rowcount!=1:raise RuntimeError('Concurrent edit')
                     db.execute('INSERT INTO pipeline_revisions(job_id,youtube_id,before_sha,after_sha,original_gzip,old_metadata,proof,changed_at) VALUES(?,?,?,?,?,?,?,?)',
                                (job,ident,item['before_sha'],item['after_sha'],str(path),json.dumps(dict(old)) if old else None,json.dumps(dict(item,maintenance_version=result['version']),ensure_ascii=False),core.now()))
-                    if item.get('timed_source'):
-                        source=item['timed_source'];source_path=Path(source['raw_path'])
+                    artifact=item.get('timed_source') or item.get('local_text_source')
+                    if artifact:
+                        source=artifact;source_path=Path(source['raw_path'])
                         if hashlib.sha256(gzip.decompress(source_path.read_bytes())).hexdigest()!=source['sha256']:
                             raise RuntimeError('Timed source checksum mismatch')
                         db.execute('INSERT OR REPLACE INTO pipeline_transcripts VALUES(?,?,?,?,?,?,?)',
-                                   (ident,source['language'],'verified-local-timed-captions',str(source_path),source['sha256'],core.CAPTION_VERSION,core.now()))
+                                   (ident,source['language'],'verified-local-timed-captions' if item.get('timed_source') else 'verified-local-text-source',str(source_path),source['sha256'],core.CAPTION_VERSION,core.now()))
                     # Preserve the real caption source provenance if present;
                     # this journal describes the derived text transformation.
             revision_count=db.execute('SELECT count(*) FROM pipeline_revisions WHERE job_id=?',(job,)).fetchone()[0]
