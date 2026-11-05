@@ -239,8 +239,8 @@ def apply(runtime,target):
                 if digest(current)!=item['before_sha']:raise RuntimeError('Concurrent edit: '+ident)
                 candidate=gzip.decompress((target/'candidates'/(ident+'.txt.gz')).read_bytes()).decode('utf8')
                 if digest(candidate)!=item['after_sha']:raise RuntimeError('Invalid candidate: '+ident)
-                # All originals/candidates are on Drive; avoid rescanning the entire
-                # local staging tree for every small SQLite transaction.
+                # Check the managed cache in bounded batches, keeping a reserve
+                # for SQLite writes and locally staged compressed originals.
                 if entry_index%25==0:runtime.check_space(128*1024**2)
                 path=archive/f"{ident}.{item['before_sha']}.rendered.txt.gz"
                 if not path.exists():

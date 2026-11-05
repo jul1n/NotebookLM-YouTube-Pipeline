@@ -175,7 +175,7 @@ def audit_quality(runtime,channel=None,sample_limit=6,progress=None):
     markdown+=f'Textes analysés : **{total}**.\n\n| Résultat | Textes |\n|---|---:|\n'
     labels={'technical_issue':'Marqueurs techniques suspects','repetition_review':'Répétitions à relire','no_heuristic_alert':'Aucune alerte heuristique'}
     for key,count in counts.items():markdown+=f'| {labels[key]} | {count} |\n'
-    markdown+='\nLes répétitions peuvent être réellement prononcées. Elles ne sont jamais supprimées globalement.\n'
+    markdown+='\nLes répétitions peuvent être réellement prononcées. Cet audit reste en lecture seule ; les corrections suivent la politique de déduplication choisie.\n'
     for item in previews:
         ident=item['youtube_id'];markdown+=f"\n## {item['channel']} — {item['title']}\n\nVidéo : https://www.youtube.com/watch?v={ident}\n\n[Texte actuel]({ident}/before.txt) · [Copie retraitée]({ident}/after.txt) · [Comparaison détaillée]({ident}/comparison.json)\n\n"
         mode=('Retraitement depuis une source horodatée locale.' if item['reprocessing_mode']=='raw_captions' else
