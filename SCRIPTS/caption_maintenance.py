@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import re
 import sys
@@ -183,11 +184,31 @@ def report(target,result,applied=None):
     (target/'REPORT.md').write_text(text,encoding='utf8')
 
 
+def publish_local_originals(runtime,db,job,archive):
+    final=runtime.root/'WORKING_ZONE'/'_LEGACY_RENDERED_GZ'
+    final.mkdir(parents=True,exist_ok=True)
+    rows=[dict(row) for row in db.execute('SELECT id,original_gzip,before_sha FROM pipeline_revisions WHERE job_id=?',(job,))
+          if Path(row['original_gzip']).resolve().is_relative_to(archive.resolve())]
+    def copy(row):
+        source=Path(row['original_gzip']);data=source.read_bytes()
+        if hashlib.sha256(gzip.decompress(data)).hexdigest()!=row['before_sha']:raise RuntimeError('Invalid cached original')
+        destination=final/source.name;temporary=destination.with_name(destination.name+'.copying')
+        temporary.write_bytes(data)
+        if hashlib.sha256(temporary.read_bytes()).digest()!=hashlib.sha256(data).digest():raise RuntimeError('Original publication mismatch')
+        temporary.replace(destination)
+        return str(destination),row['id']
+    with ThreadPoolExecutor(max_workers=4) as pool:updates=list(pool.map(copy,rows))
+    with db:db.executemany('UPDATE pipeline_revisions SET original_gzip=? WHERE id=?',updates)
+    print(json.dumps(dict(originals_published=len(updates))),flush=True)
+
+
 def apply(runtime,target):
     result=json.loads((target/'PLAN.json').read_text(encoding='utf8'))
     if result['version']!=VERSION or Path(result['database'])!=runtime.db:raise ValueError('Plan incompatible')
     job='maintenance-'+target.name
-    archive=runtime.root/'WORKING_ZONE'/'_LEGACY_RENDERED_GZ';archive.mkdir(parents=True,exist_ok=True)
+    archive=Path(result['local_original_archive']) if result.get('local_original_archive') else runtime.root/'WORKING_ZONE'/'_LEGACY_RENDERED_GZ'
+    if result.get('local_original_archive') and not archive.resolve().is_relative_to(runtime.work.resolve()):raise ValueError('Original cache outside managed working directory')
+    archive.mkdir(parents=True,exist_ok=True)
     with core.acquisition_lock(runtime):
         core.backup(runtime)
         integrity(runtime)
@@ -249,6 +270,7 @@ def apply(runtime,target):
                 if hashlib.sha256(gzip.decompress(Path(row['original_gzip']).read_bytes())).hexdigest()!=row['before_sha']:raise RuntimeError('Original mismatch')
                 active=db.execute('SELECT transcript FROM videos WHERE youtube_id=?',(row['youtube_id'],)).fetchone()[0]
                 if digest(active)!=row['after_sha']:raise RuntimeError('Active mismatch')
+            if result.get('local_original_archive'):publish_local_originals(runtime,db,job,archive)
         checks=integrity(runtime)
         report(target,result,applied)
         core.atomic_json(target/'APPLIED.json',dict(job=job,changed=applied,source_links=source_links,revisions=revision_count,integrity=checks,verified_at=core.now()))
@@ -265,7 +287,7 @@ def apply(runtime,target):
         for status,label in [('technical_issue','Alertes techniques'),('repetition_review','Textes avec répétitions à examiner'),('no_heuristic_alert','Textes sans alerte de ces règles')]:
             summary+=f"- {label} : {audit['status_counts'].get(status,0)}\n"
         summary+='\nCes nombres décrivent des textes signalés, pas autant d’erreurs confirmées. Des textes précédemment classés techniques peuvent maintenant apparaître dans les répétitions. Les répétitions courtes dans les documents reconstruits restent volontairement présentes.\n\n'
-        short=[x for x in result['entries'] if x['apply'] and x['source_review_notes']]
+        short=[x for x in result['entries'] if x['apply'] and x.get('source_review_notes',[])]
         if short:
             summary+='## Sources très courtes à contrôler\n\nLa disparition des balises ne répare pas un sous-titre incomplet ou peu informatif.\n\n'
             for item in short:summary+=f"- {item['youtube_id']} — {item['channel']} — {item['title']}\n"

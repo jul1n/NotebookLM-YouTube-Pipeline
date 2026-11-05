@@ -50,3 +50,9 @@ python SCRIPTS/caption_spoken_dedup.py --target DATABASE/pilot_reports/spoken-de
 ```
 
 Une relance du même plan reprend les corrections déjà journalisées sans les dupliquer. Le fichier DONE.json indique la fin des contrôles et des exports.
+
+### Exécution locale accélérée
+
+`caption_spoken_local.py --root "CHEMIN_DU_PROJET"` prépare les copies corrigées dans `TempPath/repair_jobs/spoken-dedup-20261101`, avec un journal `REVIEWS.jsonl` et des empreintes permettant la reprise. Les candidats altérés ou dont le texte de départ a changé sont recalculés. Le code peut lui aussi être copié dans le cache local avant exécution. Les séquences d’occurrences sont parcourues sans recopier l’historique complet pour chaque mot.
+
+Les originaux restent dans le cache pendant l’application, puis sont copiés et vérifiés sur Drive avec quatre écritures simultanées. Le journal SQLite ne pointe vers Drive qu’après publication réussie de toutes les copies ; les originaux locaux sont conservés. Les contrôles, packs, sauvegardes et rapports sont ensuite produits. Les candidats de travail restent en local ; les rapports finaux sont publiés sur Drive. Aucun média n’est ajouté ni supprimé. Les vérifications d’espace couvrent aussi ce cache dans le plafond total de 10 Go.

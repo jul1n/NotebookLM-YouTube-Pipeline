@@ -64,6 +64,9 @@ class MaintenanceTest(unittest.TestCase):
         self.assertTrue(proof['eligible'])
         self.assertTrue(result.endswith('yes yes yes'))
 
+    def test_local_original_cache_is_published_and_journal_remains_reversible(self):
+        self._exercise_apply(local_originals=True)
+
     def test_apply_journals_original_and_preserves_source_metadata(self):
         self._exercise_apply()
 
@@ -85,7 +88,7 @@ class MaintenanceTest(unittest.TestCase):
     def test_invalid_plain_text_source_rolls_back(self):
         self._exercise_apply(text_source=True,invalid_source=True)
 
-    def _exercise_apply(self,timed_source=False,invalid_source=False,metadata_only=False,text_source=False):
+    def _exercise_apply(self,timed_source=False,invalid_source=False,metadata_only=False,text_source=False,local_originals=False):
         from contextlib import ExitStack
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);(root/'DATABASE').mkdir()
@@ -99,6 +102,8 @@ class MaintenanceTest(unittest.TestCase):
                 db.executescript('CREATE TABLE body_updates(n INTEGER); INSERT INTO body_updates VALUES(0); CREATE TRIGGER count_body_update AFTER UPDATE ON videos BEGIN UPDATE body_updates SET n=n+1; END;')
             runtime=core.Runtime(root);target=root/'DATABASE'/'pilot_reports'/'test'
             m.plan(runtime,target)
+            if local_originals:
+                data=json.loads((target/'PLAN.json').read_text(encoding='utf8'));data['local_original_archive']=str(runtime.work/'originals');core.atomic_json(target/'PLAN.json',data)
             if metadata_only:
                 data=json.loads((target/'PLAN.json').read_text(encoding='utf8'))
                 data['entries']=[dict(youtube_id='abcdefghijk',channel='Test',title='Title',category='verified_source_archival_only',
