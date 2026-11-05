@@ -176,7 +176,16 @@ class Runtime:
         self.policy = json.loads(policy_file.read_text(encoding='utf-8-sig')) if policy_file.exists() else {}
 
     def usage(self):
-        return sum(p.stat().st_size for p in self.local_root.rglob("*") if p.is_file()) if self.local_root else 0
+        if not self.local_root or not self.local_root.exists():return 0
+        # Windows directory enumeration supplies cached file sizes. Avoid three
+        # separate filesystem queries per file during every budget check.
+        total=0;pending=[self.local_root]
+        while pending:
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):pending.append(entry.path)
+                    elif entry.is_file():total+=entry.stat().st_size
+        return total
 
     def check_space(self, reservation=0):
         if self.local_root and self.usage() + reservation > self.budget:
