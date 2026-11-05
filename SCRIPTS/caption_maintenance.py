@@ -286,7 +286,7 @@ def apply(runtime,target):
         if excluded:summary+=f'- Textes conservés en base mais écartés des packs et de la recherche pour contenu inexploitable : {excluded}\n'
         for status,label in [('technical_issue','Alertes techniques'),('repetition_review','Textes avec répétitions à examiner'),('no_heuristic_alert','Textes sans alerte de ces règles')]:
             summary+=f"- {label} : {audit['status_counts'].get(status,0)}\n"
-        summary+='\nCes nombres décrivent des textes signalés, pas autant d’erreurs confirmées. Des textes précédemment classés techniques peuvent maintenant apparaître dans les répétitions. Les répétitions courtes dans les documents reconstruits restent volontairement présentes.\n\n'
+        summary+='\nCes nombres décrivent des textes signalés, pas autant d’erreurs confirmées. Des textes précédemment classés techniques peuvent maintenant apparaître dans les répétitions. Les règles de correction et les protections appliquées sont décrites dans le plan.\n\n'
         short=[x for x in result['entries'] if x['apply'] and x.get('source_review_notes',[])]
         if short:
             summary+='## Sources très courtes à contrôler\n\nLa disparition des balises ne répare pas un sous-titre incomplet ou peu informatif.\n\n'
