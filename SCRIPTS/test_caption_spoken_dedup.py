@@ -21,6 +21,11 @@ class SpokenDedupTest(unittest.TestCase):
         for text in ['x + x', 'C C++', 'A - A', 'x / x', 'x = x', 'A < A']:
             self.assertEqual(deduplicate(text)[0],text)
 
+    def test_structural_delimiters_are_not_orphaned(self):
+        for text in ['[Music] music starts.', '(Hello) hello there.', '"Hello" hello there.']:
+            self.assertEqual(deduplicate(text)[0],text)
+        self.assertEqual(deduplicate('[Music] [Music] End')[0],'[Music] End')
+
     def test_nonadjacent_and_different_words(self):
         for text in ['I want this but I want that.', 'I do not agree. I agree.', 'Bonjour tout le monde.']:
             self.assertEqual(deduplicate(text)[0],text)

@@ -11,7 +11,17 @@ import caption_quality as quality
 import caption_maintenance as maintenance
 import pipeline_core as core
 
-VERSION='adjacent-spoken-repetitions-v3'
+VERSION='adjacent-spoken-repetitions-v4'
+STRUCTURAL=frozenset('[](){}«»“”'+chr(34))
+STRUCTURAL_PATTERN=re.compile('['+re.escape(''.join(STRUCTURAL))+']')
+
+def structural_sequence(text):
+    return ''.join(STRUCTURAL_PATTERN.findall(text))
+
+def wrappers(text,first,last):
+    opening=text[first.start()-1:first.start()] if first.start() else ''
+    closing=text[last.end():last.end()+1]
+    return (opening if opening in STRUCTURAL else '',closing if closing in STRUCTURAL else '')
 # Reflexive pronouns, grammatical double verbs/determiners and logical negation
 # can be consecutive without expressing a repeated utterance.
 GRAMMATICAL_DOUBLES={'nous','vous','had','that','not','pas'}
@@ -34,6 +44,7 @@ def deduplicate(text,max_unit=128):
                     # Operators distinguish x + x, C/C++ or A - A from a spoken restart.
                     fragment=text[left[0][1].start():right[-1][1].end()+2]
                     if re.search(r'[+*/=<>^%−-]',fragment):continue
+                    if wrappers(text,left[0][1],left[-1][1])!=wrappers(text,right[0][1],right[-1][1]):continue
                     found=width;break
             if not found:break
             retained=stack[-found-1][1];last=stack[-1][1]
@@ -49,6 +60,8 @@ def deduplicate(text,max_unit=128):
     for start,end in merged:chunks.append(text[cursor:start]);cursor=end
     chunks.append(text[cursor:]);result=''.join(chunks)
     if re.findall(r'\d+(?:[.,]\d+)*',text)!=re.findall(r'\d+(?:[.,]\d+)*',result):raise ValueError('Numeric content changed')
+    if any(abs(result.count(a)-result.count(b))>abs(text.count(a)-text.count(b)) for a,b in [('(',')'),('[',']'),('{','}'),('«','»'),('“','”')]) or result.count(chr(34))%2>text.count(chr(34))%2:
+        result=text;removed=0;events=0;examples=[]
     return result,dict(version=VERSION,events=events,removed_words=removed,examples=examples,
                        authorization='User accepts removal of spoken tics and emphasis; only adjacent exact token copies removed',max_unit=max_unit)
 
@@ -60,7 +73,7 @@ def plan(runtime,target):
         for line in journal_path.read_text(encoding='utf8').splitlines():
             try:record=json.loads(line)
             except ValueError:continue
-            if record.get('version')==VERSION:records[record['youtube_id']]=record
+            if record.get('version') in {VERSION,'adjacent-spoken-repetitions-v3'}:records[record['youtube_id']]=record
     entries=[];scanned=0;removed=0;excluded=[];reused=0
     with core.closing_database(core.connect(runtime.db,True)) as db, journal_path.open('a',encoding='utf8') as journal:
         exclusions=core.quality_exclusions(runtime,db)
@@ -69,7 +82,10 @@ def plan(runtime,target):
             if ident in exclusions:excluded.append(ident);continue
             cached=records.get(ident);valid=bool(cached and cached['before_sha']==before_sha)
             if valid and cached['item']:
-                try:valid=maintenance.digest(gzip.decompress((folder/(ident+'.txt.gz')).read_bytes()).decode('utf8'))==cached['item']['after_sha']
+                try:
+                    cached_text=gzip.decompress((folder/(ident+'.txt.gz')).read_bytes()).decode('utf8')
+                    valid=maintenance.digest(cached_text)==cached['item']['after_sha']
+                    if cached.get('version')!=VERSION:valid=valid and structural_sequence(old)==structural_sequence(cached_text)
                 except (OSError,ValueError,EOFError,UnicodeError):valid=False
             if valid:
                 item=cached['item'];reused+=1

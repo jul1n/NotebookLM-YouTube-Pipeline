@@ -23,6 +23,20 @@ class LocalRepairTest(unittest.TestCase):
             (target/'PLAN.json').unlink();(target/'candidates/abcdefghijk.txt.gz').write_bytes(gzip.compress(b'Changed content'))
             spoken.plan(runtime,target)
             self.assertEqual(gzip.decompress((target/'candidates/abcdefghijk.txt.gz').read_bytes()),b'Hello world.')
+    def test_legacy_cache_with_removed_delimiters_is_recomputed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);(root/'DATABASE').mkdir();runtime=core.Runtime(root)
+            old='[Music] music hello hello.';bad='[Music hello.'
+            with core.closing_database(sqlite3.connect(runtime.db)) as db:
+                db.executescript('CREATE TABLE channels(id INTEGER PRIMARY KEY,prefix TEXT); INSERT INTO channels VALUES(1,"Test"); CREATE TABLE videos(id INTEGER PRIMARY KEY,youtube_id TEXT,title TEXT,transcript TEXT,channel_id INTEGER);')
+                db.execute('INSERT INTO videos VALUES(1,?,?,?,1)',('abcdefghijk','Test',old));db.commit()
+            target=root/'job';(target/'candidates').mkdir(parents=True)
+            (target/'candidates/abcdefghijk.txt.gz').write_bytes(gzip.compress(bad.encode()))
+            record=dict(version='adjacent-spoken-repetitions-v3',youtube_id='abcdefghijk',before_sha=maintenance.digest(old),item=dict(after_sha=maintenance.digest(bad)))
+            (target/'REVIEWS.jsonl').write_text(json.dumps(record)+'\n',encoding='utf8')
+            spoken.plan(runtime,target)
+            self.assertEqual(gzip.decompress((target/'candidates/abcdefghijk.txt.gz').read_bytes()).decode(),'[Music] music hello.')
+
     def test_originals_publish_then_change_journal_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);runtime=core.Runtime(root);archive=root/'cache';archive.mkdir();raw=b'Original text';sha=maintenance.digest(raw.decode());source=archive/'a.gz';source.write_bytes(gzip.compress(raw))
