@@ -44,8 +44,11 @@ def checked_path(root, item):
 
 def verified_backup(runtime):
     for marker in sorted((runtime.database_dir/'snapshots').glob('*.verified.json'),reverse=True):
-        proof=json.loads(marker.read_text(encoding='utf8'));path=core.snapshot_database(runtime,marker)
+        proof=json.loads(marker.read_text(encoding='utf8'))
         if not proof.get('verified') or proof.get('owner')!='notebooklm-pipeline':continue
+        source=marker.with_name(proof['filename'])
+        if not source.exists() or source.stat().st_size!=proof.get('compressed_size',proof['size']):continue
+        path=core.snapshot_database(runtime,marker)
         if not path.exists() or path.stat().st_size!=proof['size']:continue
         runtime.work.mkdir(parents=True,exist_ok=True)
         cached=runtime.work/('deletion-verified-'+proof['sha256']+'.db')
@@ -62,7 +65,7 @@ def verified_backup(runtime):
             if h.hexdigest()!=proof['sha256']:raise ValueError('Backup checksum mismatch')
             os.replace(partial,cached)
         if h.hexdigest()!=proof['sha256']:raise ValueError('Backup checksum mismatch')
-        return cached,dict(proof,drive_path=str(path))
+        return cached,dict(proof,drive_path=str(source))
     raise ValueError('No verified backup')
 
 

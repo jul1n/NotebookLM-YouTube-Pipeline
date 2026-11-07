@@ -721,6 +721,7 @@ def quality_exclusions(runtime, db):
 
 
 def packs(runtime, word_limit=200000, channel=None):
+    from caption_quality import MARKERS
     if word_limit < 1:
         raise ValueError("La limite de mots doit être positive")
     base = runtime.root/"assets"
@@ -748,6 +749,9 @@ def packs(runtime, word_limit=200000, channel=None):
                 rows = db.execute("SELECT youtube_id,title,upload_date,transcript FROM videos WHERE channel_id=? AND trim(COALESCE(transcript,''))!='' ORDER BY upload_date,id", (chan["id"],))
                 for row in rows:
                     if row['youtube_id'] in excluded:continue
+                    if MARKERS['downloader_metadata'].search(row['transcript']):
+                        excluded[row['youtube_id']] = dict(quality_reason='Downloader metadata instead of spoken transcript')
+                        continue
                     header = f"--- VIDEO: {row['title']} ({row['upload_date']}) https://www.youtube.com/watch?v={row['youtube_id']} ---"
                     # Split long videos, count headers as well, keep exact source IDs.
                     words = row["transcript"].split()
@@ -855,6 +859,7 @@ def transcribe(runtime, model_name="base", limit=1):
 
 
 def import_transcripts(runtime):
+    from caption_quality import MARKERS
     source = runtime.root/"_RECOVERY_TRANSCRIPTS"
     source.mkdir(exist_ok=True)
     archive = source/"_ARCHIVE"
@@ -871,6 +876,9 @@ def import_transcripts(runtime):
             if path.suffix.lower() in {".srt", ".vtt"}:
                 text = clean_captions(text)
             text = text.strip()
+            if MARKERS['downloader_metadata'].search(text):
+                print(f'{ident}: métadonnées détectées ; source conservée pour examen.')
+                continue
             if not text:
                 print(f"{ident}: texte vide, fichier conservé")
                 continue

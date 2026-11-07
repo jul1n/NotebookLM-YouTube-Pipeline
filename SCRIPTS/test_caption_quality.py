@@ -11,6 +11,14 @@ import pipeline_core as core
 
 
 class QualityTest(unittest.TestCase):
+    def test_downloader_metadata_is_flagged_without_flagging_quoted_prose(self):
+        metadata = json.dumps(dict(id='abcdefghijk', title='Video', formats=[], http_headers={}))
+        self.assertEqual(quality.inspect_text(metadata)['technical_markers']['downloader_metadata'], 1)
+        without_headers = json.dumps(dict(id='abcdefghijk', title='Video', formats=[], thumbnails=[]))
+        self.assertIn('downloader_metadata', quality.inspect_text(without_headers)['technical_markers'])
+        prose = 'Voici un exemple de réponse JSON. '+metadata
+        self.assertNotIn('downloader_metadata', quality.inspect_text(prose)['technical_markers'])
+
     def test_inline_and_encoded_time_tags_removed(self):
         text='What<00:00:00.800><c> is</c>&amp;lt;00:00:01.000&amp;gt;&lt;c&gt; next&lt;/c&gt;'
         self.assertTrue(quality.inspect_text(text)['technical_markers'])

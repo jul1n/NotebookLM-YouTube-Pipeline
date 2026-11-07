@@ -196,6 +196,24 @@ class PipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'différente'):
             core.snapshot_database(self.runtime, marker)
 
+    def test_import_rejects_downloader_metadata_and_keeps_source(self):
+        folder = self.root/'_RECOVERY_TRANSCRIPTS'
+        folder.mkdir()
+        source = folder/'[abcdefghijk].txt'
+        source.write_text(json.dumps(dict(id='abcdefghijk',title='Video',formats=[])),encoding='utf8')
+        core.import_transcripts(self.runtime)
+        self.assertTrue(source.exists())
+        with core.closing_database(core.connect(self.dbpath,True)) as db:
+            self.assertIsNone(db.execute('SELECT transcript FROM videos').fetchone()[0])
+
+    def test_packs_exclude_downloader_metadata(self):
+        with core.closing_database(core.connect(self.dbpath)) as db:
+            db.execute('UPDATE videos SET transcript=?',(json.dumps(dict(id='abcdefghijk',title='Video',formats=[])),))
+        core.packs(self.runtime)
+        manifest = json.loads((self.root/'assets/packs/manifest.json').read_text(encoding='utf8'))
+        self.assertEqual(manifest['packs'], [])
+        self.assertEqual(manifest['quality_exclusions'][0]['youtube_id'], 'abcdefghijk')
+
     def test_import_unknown_id_keeps_source_and_media(self):
         source = self.root/'_RECOVERY_TRANSCRIPTS'
         source.mkdir()

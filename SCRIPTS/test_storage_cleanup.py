@@ -33,6 +33,22 @@ class CleanupTest(unittest.TestCase):
         core.atomic_json(self.target/'DELETE_PLAN.json',dict(root=str(self.root),database=str(self.runtime.db),entries=[item]))
         return backup
 
+    def test_backup_skips_newer_unmanaged_marker(self):
+        core.backup(self.runtime)
+        folder = self.root/'DATABASE/snapshots'
+        core.atomic_json(folder/'zzzz.verified.json',dict(owner='manual',verified=True,filename='manual.db'))
+        cached,proof = cleanup.verified_backup(self.runtime)
+        self.assertTrue(cached.is_file())
+        self.assertEqual(proof['owner'],'notebooklm-pipeline')
+
+    def test_compressed_backup_reports_actual_drive_path(self):
+        self.runtime.policy['compress_verified_backups'] = True
+        core.backup(self.runtime)
+        cached,proof = cleanup.verified_backup(self.runtime)
+        self.assertTrue(cached.is_file())
+        self.assertTrue(proof['drive_path'].endswith('.db.gz'))
+        self.assertEqual(Path(proof['drive_path']).parent,self.root/'DATABASE/snapshots')
+
     def test_protected_paths_and_changed_file(self):
         item=self.item('abcdefghijk.info.json');Path(item['path']).write_text('changed',encoding='utf8')
         with self.assertRaises(ValueError):cleanup.checked_path(self.root,item)

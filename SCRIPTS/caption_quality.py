@@ -16,6 +16,7 @@ import caption_reconstruction
 
 
 MARKERS = {
+    'downloader_metadata': re.compile(r'\A\s*\{\s*"id"\s*:\s*"[A-Za-z0-9_-]{11}"(?=[\s\S]{0,8192}"formats"\s*:)'),
     'inline_timestamp': re.compile(r'(?:<|&lt;|&amp;lt;|&#60;)(?:\d+:)?\d{2}:\d{2}[.,]\d{3}(?:>|&gt;|&amp;gt;|&#62;)'),
     'cue_timing': re.compile(r'\b(?:\d{2,}:)?\d{2}:\d{2}[.,]\d{3}\s*-->'),
     'orphan_timecode': re.compile(r'(?<!\w)\d{2,}:\d{2}:\d{2}[.,]\d{3}(?!\d)'),
