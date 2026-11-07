@@ -351,9 +351,15 @@ def local_caption(index, ident, languages):
     return None
 
 
-def sync(runtime, channel=None, force=False, limit=500, offline=False):
+def sync(runtime, channel=None, force=False, limit=500, offline=False, youtube_ids=None, captions=None):
     if not 1 <= limit <= 500:
         raise ValueError('La synchronisation est limitée à 1–500 vidéos par lancement')
+    if youtube_ids is not None:
+        youtube_ids = list(dict.fromkeys(youtube_ids))
+        if not youtube_ids:
+            return
+        if len(youtube_ids)>500 or any(not VIDEO_ID.fullmatch(ident) for ident in youtube_ids):
+            raise ValueError('Liste d’identifiants YouTube invalide ou trop grande')
     with closing_database(connect(runtime.db)) as db:
         init_state(db)
         pause_guard(db)
@@ -361,6 +367,9 @@ def sync(runtime, channel=None, force=False, limit=500, offline=False):
         LEFT JOIN pipeline_attempts a ON a.youtube_id=v.youtube_id
         WHERE COALESCE(v.transcript,'')='' AND COALESCE(v.status,'')!='PREMIUM' """
         args = []
+        if youtube_ids is not None:
+            sql += " AND v.youtube_id IN (" + ','.join('?' for _ in youtube_ids) + ")"
+            args.extend(youtube_ids)
         if channel:
             sql += " AND c.prefix=?"
             args.append(channel)
@@ -370,7 +379,8 @@ def sync(runtime, channel=None, force=False, limit=500, offline=False):
         rows = db.execute(sql + " ORDER BY v.upload_date DESC,v.id LIMIT ?", [*args,limit]).fetchall()
         runtime.archive.mkdir(parents=True, exist_ok=True)
         runtime.work.mkdir(parents=True, exist_ok=True)
-        captions = caption_inventory(runtime) if rows else {}
+        if captions is None:
+            captions = caption_inventory(runtime) if rows else {}
         for row in rows:
             ident = row["youtube_id"]
             if not VIDEO_ID.fullmatch(ident):

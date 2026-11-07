@@ -129,3 +129,12 @@ Le traitement retire les paires d'en-têtes `Kind: captions Language: ...` uniqu
 Pour les anciens textes aplatis sans horodatage, la reconstruction exige au moins 98 % de mots dans des triples copies exactes, cent groupes au total et trente groupes de six mots ou plus. Seules les copies des groupes d'au moins six mots sont retirées. Cette règle est une inférence du format du document, pas une certification de la parole originale. Les répétitions courtes, partielles, isolées ou insuffisamment documentées restent signalées.
 
 L'application exige le journal `pipeline_revisions` existant, effectue une sauvegarde vérifiée, conserve chaque original compressé avec ses empreintes et préserve la provenance de la source horodatée. Une modification concurrente interrompt le traitement. Une reprise ne réapplique pas les textes déjà identiques au résultat prévu. SQLite/FTS sont contrôlés, les packs et le dashboard régénérés, puis une sauvegarde finale est vérifiée. Aucun appel à YouTube, aucun audio, aucune suppression de média ou d'archive historique.
+
+
+## Lot manuel de vidéos en attente
+
+`python SCRIPTS/pending_runner.py --job DATABASE/pending_runs/nom-du-lot --prepare` fige la liste exacte des vidéos PENDING sans texte. La même commande sans `--prepare` lance le lot. Les autres catégories et les nouvelles fiches ajoutées après préparation ne sont pas intégrées à ce lot.
+
+Le traitement indexe les sources locales une fois, sélectionne chaque identifiant explicitement et espace les invocations yt-dlp d’au moins 60 secondes. Il désactive les relances internes et s’arrête au premier échec réseau. Il conserve un état privé, une liste QUEUE.json et un REPORT.md dans le répertoire du lot. Il sauvegarde avant acquisition, tous les 50 éléments et à la fin. Packs et tableau de bord sont actualisés à la fin ou après un blocage réseau.
+
+Un lot terminé, bloqué ou en erreur n’est pas relancé automatiquement. Une requête interrompue nécessite une vérification avant nouvelle tentative. Aucun audio ni suppression n’est exécuté. La commande peut être lancée une fois en arrière-plan, sans créer de planification récurrente. Sur plusieurs centaines de vidéos, le traitement peut durer plus d’une journée. Le plafond local reste de 10 Go.

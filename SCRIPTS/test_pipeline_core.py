@@ -69,6 +69,23 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(core.video_id('abcdefghijk.mp4'), 'abcdefghijk')
         self.assertIsNone(core.video_id('PARTENARIAT vidéo.mp4'))
 
+    def test_targeted_sync_reuses_index_and_leaves_other_video_pending(self):
+        self.runtime.archive.mkdir(parents=True)
+        source=self.runtime.archive/'abcdefghijk.fr.vtt.gz'
+        source.write_bytes(gzip.compress(b'WEBVTT\n\n00:00.000 --> 00:01.000\nOui'))
+        with core.closing_database(core.connect(self.dbpath)) as db:
+            db.execute("INSERT INTO videos VALUES(2,1,'lmnopqrstuv','Other',NULL,'PENDING','20261101')")
+        with patch.object(core,'caption_inventory',side_effect=AssertionError('rescanned')),patch.object(core,'run_yt',side_effect=AssertionError('network')),patch.object(core.time,'sleep'):
+            core.sync(self.runtime,youtube_ids=['abcdefghijk'],captions={('abcdefghijk','fr'):[source]})
+        with core.closing_database(core.connect(self.dbpath,True)) as db:
+            self.assertEqual(db.execute("SELECT transcript FROM videos WHERE youtube_id='abcdefghijk'").fetchone()[0],'Oui')
+            self.assertIsNone(db.execute("SELECT transcript FROM videos WHERE youtube_id='lmnopqrstuv'").fetchone()[0])
+
+    def test_empty_target_list_never_selects_all_videos(self):
+        with patch.object(core,'connect',side_effect=AssertionError('database accessed')):
+            core.sync(self.runtime,youtube_ids=[])
+        with self.assertRaises(ValueError):core.sync(self.runtime,youtube_ids=['bad-id'])
+
     def test_cached_sync_short_caption_no_network(self):
         self.runtime.archive.mkdir(parents=True)
         (self.runtime.archive/'abcdefghijk.fr.vtt.gz').write_bytes(gzip.compress(b'WEBVTT\n\n00:00.000 --> 00:01.000\nOui'))
