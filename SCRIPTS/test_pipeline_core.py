@@ -38,6 +38,21 @@ class PipelineTest(unittest.TestCase):
             INSERT INTO videos VALUES(1,1,'abcdefghijk','Titre | spécial',NULL,NULL,'20261030');''')
         self.runtime = core.Runtime(self.root)
 
+    def test_network_diagnostic_never_saves_raw_secrets(self):
+        raw = 'ERROR: page needs to be reloaded https://example.test/?token=SECRET Cookie: SECRET C:\\private\\SECRET'
+        target, categories = core.youtube_failure_diagnostic(self.runtime,raw,1,['--dump-single-json'],'abcdefghijk')
+        stored=target.read_text(encoding='utf-8')
+        self.assertEqual(categories,['page_reload_required'])
+        self.assertNotIn('SECRET',stored)
+        self.assertNotIn('example.test',stored)
+        self.assertEqual(json.loads(stored)['youtube_id'],'abcdefghijk')
+
+    def test_unclassified_network_error_remains_private(self):
+        target,categories=core.youtube_failure_diagnostic(self.runtime,'arbitrary sensitive output',1,[], 'not-an-id')
+        self.assertEqual(categories,['unclassified_extractor_error'])
+        self.assertIsNone(json.loads(target.read_text())['youtube_id'])
+        self.assertNotIn('sensitive',target.read_text())
+
     def test_timed_overlap_preserves_later_repetition(self):
         self.assertEqual(core.clean_captions(CAPTIONS), 'Bonjour le monde & vous Bonjour le monde')
 

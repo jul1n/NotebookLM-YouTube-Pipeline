@@ -271,6 +271,29 @@ def yt_args(runtime):
     return ["--cookies", str(cookie)] if cookie.exists() else ["--cookies-from-browser", "firefox"]
 
 
+def youtube_failure_diagnostic(runtime, output, returncode, args, ident=None):
+    # Persist only known categories, never raw stderr, URLs, cookies or paths.
+    rules = {
+        'http_429': r'HTTP(?: Error)?\s*429|Too Many Requests',
+        'page_reload_required': r'page needs to be reloaded',
+        'authentication_required': r'Sign in to confirm|login required|authentication required',
+        'cookie_access_failed': r'could not (?:copy|find|read).*cookie|failed to decrypt|cookie database.*(?:locked|not found)',
+        'javascript_runtime_missing': r'no supported JavaScript runtime|JavaScript runtime.*not found',
+        'video_unavailable': r'Video unavailable|Private video|video has been removed',
+        'http_403': r'HTTP(?: Error)?\s*403',
+        'network_timeout': r'timed out|timeout',
+        'outdated_extractor': r'older than 90 days',
+    }
+    categories = [name for name, pattern in rules.items() if re.search(pattern, output, re.I)]
+    diagnostic = dict(created_at=now(), returncode=returncode,
+                      youtube_id=ident if ident and VIDEO_ID.fullmatch(ident) else None,
+                      operation='subtitles' if '--load-info-json' in args else 'discovery' if '--flat-playlist' in args else 'metadata',
+                      categories=categories or ['unclassified_extractor_error'])
+    target = runtime.database_dir/'network_diagnostics'/f'{time.time_ns()}.json'
+    atomic_json(target, diagnostic)
+    return target, diagnostic['categories']
+
+
 def run_yt(runtime, db, args, ident=None):
     pause_guard(db)
     process = subprocess.Popen([str(runtime.bin/"yt-dlp.exe"), *yt_args(runtime),
@@ -292,10 +315,12 @@ def run_yt(runtime, db, args, ident=None):
         process.communicate()
         raise
     runtime.check_space()
+    diagnostic = None
+    if process.returncode or re.search(r"HTTP(?: Error)?\s*429|Too Many Requests", output + errors, re.I):
+        diagnostic = youtube_failure_diagnostic(runtime, output + errors, process.returncode, args, ident)
     rate_limit(db, output + errors, ident)
     if process.returncode:
-        # Do not echo signed URLs or cookie paths in logs.
-        raise RuntimeError("Échec yt-dlp ; tentative différée, détails réseau non publiés.")
+        raise RuntimeError("Échec yt-dlp : " + ', '.join(diagnostic[1]) + "; diagnostic local " + str(diagnostic[0]))
     return output
 
 

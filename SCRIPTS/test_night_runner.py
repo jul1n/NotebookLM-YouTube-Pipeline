@@ -63,6 +63,25 @@ class NightTest(unittest.TestCase):
             with patch.object(core,'pause_guard'):
                 with self.assertRaises(night.NetworkStop):job.network_call(lambda *a: self.fail('extra request'),self.runtime,db,['--dump-single-json','url'])
 
+    def test_network_stop_records_failure_once(self):
+        job=self.job()
+        with core.closing_database(core.connect(self.db)) as db:
+            core.init_state(db)
+            with self.assertRaises(night.NetworkStop):
+                job.network_call(lambda *a: (_ for _ in ()).throw(RuntimeError('page reload')),self.runtime,db,['--dump-single-json'],'abcdefghijk')
+            row=db.execute('SELECT attempts,last_error FROM pipeline_attempts WHERE youtube_id=?',('abcdefghijk',)).fetchone()
+            self.assertEqual(tuple(row),(1,'ERR_DL_FAIL'))
+
+    def test_rate_limit_failure_not_counted_twice(self):
+        job=self.job()
+        def limited(rt,db,args,ident):core.rate_limit(db,'HTTP 429',ident)
+        with core.closing_database(core.connect(self.db)) as db:
+            core.init_state(db)
+            with self.assertRaises(night.NetworkStop):
+                job.network_call(limited,self.runtime,db,['--dump-single-json'],'abcdefghijk')
+            row=db.execute('SELECT attempts,last_error FROM pipeline_attempts WHERE youtube_id=?',('abcdefghijk',)).fetchone()
+            self.assertEqual(tuple(row),(1,'ERR_429_BLOCK'))
+
     def test_network_error_blocks_remaining_channels(self):
         job=self.job()
         with patch.object(core,'discover',side_effect=RuntimeError('HTTP 429')) as discover,patch.object(core,'sync') as sync:

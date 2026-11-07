@@ -148,6 +148,10 @@ class NightJob:
         try:
             return original(runtime,db,['--retries','0','--fragment-retries','0','--extractor-retries','0',*args],ident)
         except (RuntimeError,ValueError,OSError) as error:
+            # NetworkStop bypasses sync's handler, so persist the attempted ID here.
+            paused=db.execute("SELECT value FROM pipeline_control WHERE key='youtube_pause_until'").fetchone()
+            if ident and (not paused or paused[0]<=core.now()):
+                core.record_failure(db,ident,'ERR_DL_FAIL',24)
             raise NetworkStop(str(error)) from error
 
     def updates(self):
