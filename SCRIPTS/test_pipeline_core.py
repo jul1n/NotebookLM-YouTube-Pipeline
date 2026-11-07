@@ -140,6 +140,49 @@ class PipelineTest(unittest.TestCase):
         with core.closing_database(core.connect(files[0], True)) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM videos').fetchone()[0], 1)
 
+    def test_compressed_snapshot_restores_and_retention_counts_it(self):
+        core.backup(self.runtime)
+        folder = self.root/'DATABASE'/'snapshots'
+        marker = next(folder.glob('*.verified.json'))
+        proof = json.loads(marker.read_text(encoding='utf8'))
+        original = folder/proof['filename']
+        compressed = original.with_suffix('.db.gz')
+        compressed.write_bytes(gzip.compress(original.read_bytes()))
+        original.unlink()
+        proof.update(filename=compressed.name, compressed_size=compressed.stat().st_size)
+        core.atomic_json(marker, proof)
+        restored = core.snapshot_database(self.runtime, marker)
+        with core.closing_database(core.connect(restored, True)) as db:
+            self.assertEqual(db.execute('PRAGMA quick_check').fetchone()[0], 'ok')
+        for _ in range(3):
+            core.backup(self.runtime)
+        self.assertEqual(len(list(folder.glob('*.verified.json'))), 3)
+        self.assertFalse(compressed.exists())
+
+    def test_backup_compression_policy_preserves_restorable_snapshot(self):
+        self.runtime.policy['compress_verified_backups'] = True
+        core.backup(self.runtime)
+        folder = self.root/'DATABASE'/'snapshots'
+        self.assertEqual(len(list(folder.glob('*.db.gz'))), 1)
+        self.assertEqual(len(list(folder.glob('*.db'))), 0)
+        marker = next(folder.glob('*.verified.json'))
+        restored = core.snapshot_database(self.runtime, marker)
+        with core.closing_database(core.connect(restored, True)) as db:
+            self.assertEqual(db.execute('PRAGMA quick_check').fetchone()[0], 'ok')
+
+    def test_compressed_snapshot_rejects_wrong_restored_hash(self):
+        core.backup(self.runtime)
+        folder = self.root/'DATABASE'/'snapshots'
+        marker = next(folder.glob('*.verified.json'))
+        proof = json.loads(marker.read_text(encoding='utf8'))
+        original = folder/proof['filename']
+        compressed = original.with_suffix('.db.gz')
+        compressed.write_bytes(gzip.compress(b'wrong contents'))
+        proof.update(filename=compressed.name, compressed_size=compressed.stat().st_size)
+        core.atomic_json(marker, proof)
+        with self.assertRaisesRegex(ValueError, 'différente'):
+            core.snapshot_database(self.runtime, marker)
+
     def test_import_unknown_id_keeps_source_and_media(self):
         source = self.root/'_RECOVERY_TRANSCRIPTS'
         source.mkdir()

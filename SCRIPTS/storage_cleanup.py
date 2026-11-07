@@ -44,7 +44,7 @@ def checked_path(root, item):
 
 def verified_backup(runtime):
     for marker in sorted((runtime.database_dir/'snapshots').glob('*.verified.json'),reverse=True):
-        proof=json.loads(marker.read_text(encoding='utf8'));path=marker.with_name(proof['filename'])
+        proof=json.loads(marker.read_text(encoding='utf8'));path=core.snapshot_database(runtime,marker)
         if not proof.get('verified') or proof.get('owner')!='notebooklm-pipeline':continue
         if not path.exists() or path.stat().st_size!=proof['size']:continue
         runtime.work.mkdir(parents=True,exist_ok=True)

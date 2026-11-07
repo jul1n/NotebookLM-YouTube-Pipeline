@@ -583,6 +583,42 @@ def migrate(runtime, local_root=None):
         temporary.unlink(missing_ok=True)
 
 
+def snapshot_database(runtime, marker):
+    proof = json.loads(marker.read_text(encoding="utf-8"))
+    name = proof.get("filename", "")
+    if Path(name).name != name or not name:
+        raise ValueError("Nom de sauvegarde invalide")
+    source = marker.with_name(name)
+    if not proof.get("verified") or proof.get("owner") != "notebooklm-pipeline":
+        raise ValueError("Sauvegarde non vérifiée")
+    if not name.endswith(".gz"):
+        return source
+    runtime.work.mkdir(parents=True, exist_ok=True)
+    cached = runtime.work/("deletion-verified-"+proof["sha256"]+".db")
+    def digest(path):
+        h = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(8*1024**2), b""): h.update(block)
+        return h.hexdigest()
+    if cached.exists() and cached.stat().st_size == proof["size"] and digest(cached) == proof["sha256"]:
+        return cached
+    runtime.check_space(proof["size"]+64*1024**2)
+    with tempfile.NamedTemporaryFile(dir=runtime.work, suffix=".restoring", delete=False) as output:
+        temporary = Path(output.name)
+        try:
+            with gzip.open(source,"rb") as incoming:
+                shutil.copyfileobj(incoming,output,8*1024**2)
+        except BaseException:
+            output.close(); temporary.unlink(missing_ok=True); raise
+    try:
+        if temporary.stat().st_size != proof["size"] or digest(temporary) != proof["sha256"]:
+            raise ValueError("Sauvegarde restaurée différente")
+        os.replace(temporary,cached)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return cached
+
+
 def backup(runtime):
     folder = runtime.database_dir/"snapshots"
     folder.mkdir(parents=True, exist_ok=True)
@@ -613,6 +649,27 @@ def backup(runtime):
         temporary.unlink(missing_ok=True)
     atomic_json(path.with_suffix('.verified.json'), dict(owner='notebooklm-pipeline', verified=True,
                 filename=path.name, size=path.stat().st_size, sha256=digest.hexdigest(), verified_at=now()))
+    if runtime.policy.get('compress_verified_backups', False):
+        marker = path.with_suffix('.verified.json')
+        compressed = path.with_suffix('.db.gz')
+        partial = compressed.with_suffix('.gz.tmp')
+        try:
+            with path.open('rb') as incoming, gzip.open(partial, 'wb') as outgoing:
+                shutil.copyfileobj(incoming, outgoing, 8*1024**2)
+            restored_digest = hashlib.sha256()
+            with gzip.open(partial, 'rb') as incoming:
+                for block in iter(lambda: incoming.read(8*1024**2), b''):
+                    restored_digest.update(block)
+            if restored_digest.hexdigest() != digest.hexdigest():
+                raise ValueError('Sauvegarde compressée différente')
+            os.replace(partial, compressed)
+            proof = json.loads(marker.read_text(encoding='utf8'))
+            proof.update(filename=compressed.name, compressed_size=compressed.stat().st_size, compression='gzip')
+            atomic_json(marker, proof)
+            path.unlink()
+            path = compressed
+        finally:
+            partial.unlink(missing_ok=True)
     retention = int(runtime.policy.get('verified_backup_retention', 3))
     if retention < 1:
         raise ValueError('Au moins une sauvegarde vérifiée doit être conservée')
@@ -620,10 +677,10 @@ def backup(runtime):
     for marker in folder.glob('PIPELINE_*.verified.json'):
         try:
             proof = json.loads(marker.read_text(encoding='utf-8'))
-            candidate = marker.with_name(marker.name.removesuffix('.verified.json')+'.db')
+            candidate = marker.with_name(proof.get('filename','invalid'))
             if (proof.get('owner') == 'notebooklm-pipeline' and proof.get('verified') is True
-                    and proof.get('filename') == candidate.name and candidate.is_file()
-                    and not candidate.is_symlink() and candidate.stat().st_size == proof.get('size')
+                    and candidate.parent == folder and proof.get('filename') == candidate.name and candidate.is_file()
+                    and not candidate.is_symlink() and candidate.stat().st_size == proof.get('compressed_size',proof.get('size'))
                     and re.fullmatch(r'[a-f0-9]{64}', proof.get('sha256',''))):
                 verified.append((candidate,marker))
         except (OSError,ValueError):
@@ -839,10 +896,10 @@ def purge(runtime, file):
     ident = video_id(resolved.name)
     if not candidate or candidate["YoutubeId"] != ident:
         raise ValueError("Fichier absent des candidats vérifiés")
-    snapshots = sorted((runtime.database_dir/"snapshots").glob("*.db"), reverse=True)
+    snapshots = sorted((runtime.database_dir/"snapshots").glob("*.verified.json"), reverse=True)
     if not snapshots:
         raise ValueError("Créez une sauvegarde SQLite vérifiée avant la purge")
-    with closing_database(connect(runtime.db, True)) as db, closing_database(connect(snapshots[0], True)) as saved:
+    with closing_database(connect(runtime.db, True)) as db, closing_database(connect(snapshot_database(runtime,snapshots[0]), True)) as saved:
         current = db.execute("SELECT transcript FROM videos WHERE youtube_id=?", (ident,)).fetchone()
         previous = saved.execute("SELECT transcript FROM videos WHERE youtube_id=?", (ident,)).fetchone()
         if not current or not previous or not current[0] or current[0] != previous[0]:
