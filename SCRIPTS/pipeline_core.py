@@ -688,6 +688,20 @@ def backup(runtime):
     for old, marker in sorted(verified,reverse=True)[retention:]:
         old.unlink()
         marker.unlink()
+    retained_hashes = {json.loads(marker.read_text(encoding='utf8'))['sha256']
+                       for _, marker in sorted(verified, reverse=True)[:retention]}
+    for cached in runtime.work.glob('deletion-verified-*.db'):
+        match = re.fullmatch(r'deletion-verified-([a-f0-9]{64})\.db', cached.name)
+        if not match or match[1] in retained_hashes or cached.is_symlink():
+            continue
+        if cached.resolve().parent != runtime.work.resolve():
+            continue
+        if any(Path(str(cached)+suffix).exists() for suffix in ('-wal', '-shm', '-journal')):
+            continue
+        try:
+            cached.unlink()
+        except OSError:
+            pass
     print(f"Sauvegarde SQLite vérifiée : {path}. Rétention : {retention} sauvegardes gérées.")
 
 

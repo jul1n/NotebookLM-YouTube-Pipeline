@@ -159,6 +159,19 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(len(list(folder.glob('*.verified.json'))), 3)
         self.assertFalse(compressed.exists())
 
+    def test_backup_prunes_only_orphan_validation_caches_without_journals(self):
+        core.backup(self.runtime)
+        orphan = self.runtime.work/('deletion-verified-'+'0'*64+'.db')
+        guarded = self.runtime.work/('deletion-verified-'+'1'*64+'.db')
+        orphan.write_bytes(b'regenerable cache')
+        guarded.write_bytes(b'cache with journal')
+        journal = Path(str(guarded)+'-journal')
+        journal.write_bytes(b'preserve')
+        core.backup(self.runtime)
+        self.assertFalse(orphan.exists())
+        self.assertTrue(guarded.exists())
+        self.assertEqual(journal.read_bytes(), b'preserve')
+
     def test_backup_compression_policy_preserves_restorable_snapshot(self):
         self.runtime.policy['compress_verified_backups'] = True
         core.backup(self.runtime)
