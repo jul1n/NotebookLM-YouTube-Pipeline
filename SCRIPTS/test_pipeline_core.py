@@ -206,6 +206,16 @@ class PipelineTest(unittest.TestCase):
         with core.closing_database(core.connect(self.dbpath,True)) as db:
             self.assertIsNone(db.execute('SELECT transcript FROM videos').fetchone()[0])
 
+    def test_import_rejects_metadata_before_caption_parsing(self):
+        folder = self.root/'_RECOVERY_TRANSCRIPTS'
+        folder.mkdir()
+        source = folder/'[abcdefghijk].vtt'
+        source.write_text(json.dumps(dict(id='abcdefghijk',title='Video',formats=[]))+'\n00:00:00.000 --> 00:00:01.000\nUnrelated payload.',encoding='utf8')
+        core.import_transcripts(self.runtime)
+        self.assertTrue(source.exists())
+        with core.closing_database(core.connect(self.dbpath,True)) as db:
+            self.assertIsNone(db.execute('SELECT transcript FROM videos').fetchone()[0])
+
     def test_packs_exclude_downloader_metadata(self):
         with core.closing_database(core.connect(self.dbpath)) as db:
             db.execute('UPDATE videos SET transcript=?',(json.dumps(dict(id='abcdefghijk',title='Video',formats=[])),))

@@ -873,12 +873,12 @@ def import_transcripts(runtime):
             if not ident:
                 continue
             text = path.read_text(encoding="utf-8-sig")
-            if path.suffix.lower() in {".srt", ".vtt"}:
-                text = clean_captions(text)
-            text = text.strip()
             if MARKERS['downloader_metadata'].search(text):
                 print(f'{ident}: métadonnées détectées ; source conservée pour examen.')
                 continue
+            if path.suffix.lower() in {".srt", ".vtt"}:
+                text = clean_captions(text)
+            text = text.strip()
             if not text:
                 print(f"{ident}: texte vide, fichier conservé")
                 continue
