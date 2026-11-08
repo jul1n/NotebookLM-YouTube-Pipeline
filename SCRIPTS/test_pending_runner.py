@@ -61,6 +61,63 @@ class PendingTest(unittest.TestCase):
         batch=pending.PendingBatch(self.runtime,self.folder);batch.state['status']='blocked';batch.save()
         with patch.object(core,'acquisition_lock',side_effect=AssertionError('restarted')):batch.run()
 
+    def test_429_waits_then_retries_same_video_without_restarting_queue(self):
+        batch=pending.PendingBatch(self.runtime,self.folder)
+        calls=[]
+        def sync(rt,**kwargs):
+            ident=kwargs['youtube_ids'][0];calls.append(ident)
+            with core.closing_database(core.connect(self.runtime.db)) as db:
+                if len(calls)==1:
+                    db.execute("UPDATE videos SET status='ERR_429_BLOCK' WHERE youtube_id=?",(ident,))
+                else:db.execute("UPDATE videos SET transcript='Text',status='SUCCESS' WHERE youtube_id=?",(ident,))
+            if len(calls)==1:raise pending.BatchStopped('HTTP 429')
+        with patch.object(core,'sync',side_effect=sync),patch.object(core,'caption_inventory',return_value={}),patch.object(core,'backup',return_value=None),patch.object(core,'packs',return_value=None),patch.object(core,'list_caption_followup',return_value=None),patch.object(pending,'integrity',return_value={}),patch.object(pending,'export_dashboard',return_value={}),patch.object(batch,'wait_for_rate_limit') as wait:
+            batch.run()
+        self.assertEqual(calls,['lmnopqrstuv','lmnopqrstuv','abcdefghijk'])
+        self.assertEqual(batch.state['status'],'done')
+        self.assertEqual(batch.state['cursor'],2)
+        self.assertEqual(batch.state['cooldowns'],1)
+        self.assertEqual(batch.state['consecutive_rate_limits'],0)
+        self.assertEqual(wait.call_count,2)
+
+    def test_three_consecutive_rate_limits_stop_without_unbounded_retry(self):
+        batch=pending.PendingBatch(self.runtime,self.folder)
+        def sync(rt,**kwargs):
+            with core.closing_database(core.connect(self.runtime.db)) as db:
+                db.execute("UPDATE videos SET status='ERR_429_BLOCK' WHERE youtube_id=?",(kwargs['youtube_ids'][0],))
+            raise pending.BatchStopped('HTTP 429')
+        with patch.object(core,'sync',side_effect=sync) as sync_mock,patch.object(core,'caption_inventory',return_value={}),patch.object(core,'backup',return_value=None),patch.object(core,'packs',return_value=None),patch.object(core,'list_caption_followup',return_value=None),patch.object(pending,'integrity',return_value={}),patch.object(pending,'export_dashboard',return_value={}),patch.object(batch,'wait_for_rate_limit'):
+            batch.run()
+        self.assertEqual(sync_mock.call_count,3)
+        self.assertEqual(batch.state['status'],'blocked')
+        self.assertEqual(batch.state['cursor'],1)
+
+    def test_explicit_resume_keeps_network_counts_and_completed_results(self):
+        batch=pending.PendingBatch(self.runtime,self.folder)
+        batch.state.update(status='blocked',cursor=2,request_in_flight={'youtube_id':'abcdefghijk'})
+        batch.state['network']['calls']=16
+        batch.state['results']={'lmnopqrstuv':{'outcome':'transcript_acquired'},'abcdefghijk':{'outcome':'network_blocked'}}
+        batch.state['stages']['packs']={'status':'done'}
+        with core.closing_database(core.connect(self.runtime.db)) as db:
+            db.execute("UPDATE videos SET status='ERR_429_BLOCK' WHERE youtube_id='abcdefghijk'")
+        batch.resume_blocked()
+        self.assertEqual(batch.state['cursor'],1)
+        self.assertEqual(batch.state['network']['calls'],16)
+        self.assertEqual(batch.state['results']['lmnopqrstuv']['outcome'],'transcript_acquired')
+        self.assertNotIn('request_in_flight',batch.state)
+        self.assertNotIn('packs',batch.state['stages'])
+        self.assertTrue(batch.state['previous_final_stages'])
+
+    def test_non429_stop_cannot_be_resumed_as_rate_limit(self):
+        batch=pending.PendingBatch(self.runtime,self.folder);batch.state.update(status='blocked',cursor=1)
+        batch.state['results']['lmnopqrstuv']={'outcome':'network_blocked'}
+        with self.assertRaises(ValueError):batch.resume_blocked()
+
+    def test_expired_global_pause_returns_without_sleep(self):
+        batch=pending.PendingBatch(self.runtime,self.folder)
+        with patch.object(pending.time,'sleep',side_effect=AssertionError('unnecessary wait')):batch.wait_for_rate_limit()
+        self.assertEqual(batch.state['status'],'running')
+
     def test_requests_wait_for_minute_interval(self):
         batch=pending.PendingBatch(self.runtime,self.folder);batch.state['network']['last_call']=100
         with core.closing_database(core.connect(self.runtime.db)) as db:

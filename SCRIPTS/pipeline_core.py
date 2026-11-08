@@ -352,6 +352,34 @@ def local_caption(index, ident, languages):
     return None
 
 
+def caption_metadata(runtime, db, ident):
+    """Reuse recent private extraction results after a subtitle-only failure."""
+    folder=runtime.work/'caption-metadata'
+    folder.mkdir(parents=True,exist_ok=True)
+    path=folder/f'{ident}.json'
+    for old in folder.glob('*.json'):
+        if time.time()-old.stat().st_mtime>6*3600:
+            old.unlink()
+    if path.exists():
+        try:
+            info=json.loads(path.read_text(encoding='utf-8'))
+            if info.get('id')==ident:return info,path
+        except (ValueError,OSError):pass
+    info=json.loads(run_yt(runtime,db,['--skip-download','--dump-single-json',f'https://www.youtube.com/watch?v={ident}'],ident))
+    # Keep only the fields needed by --load-info-json; never persist cookies.
+    saved={k:info[k] for k in ['id','title','webpage_url','extractor','extractor_key','subtitles','automatic_captions','http_headers'] if k in info}
+    def without_secrets(value):
+        if isinstance(value,dict):
+            return {k:without_secrets(v) for k,v in value.items() if k.lower() not in {'cookie','cookies','authorization','proxy-authorization','set-cookie'}}
+        if isinstance(value,list):return [without_secrets(v) for v in value]
+        return value
+    saved=without_secrets(saved)
+    if saved.get('id')==ident:
+        runtime.check_space(32*1024**2)
+        atomic_json(path,saved)
+    return info,path
+
+
 def sync(runtime, channel=None, force=False, limit=500, offline=False, youtube_ids=None, captions=None):
     if not 1 <= limit <= 500:
         raise ValueError('La synchronisation est limitée à 1–500 vidéos par lancement')
@@ -397,18 +425,19 @@ def sync(runtime, channel=None, force=False, limit=500, offline=False, youtube_i
                     source = "cached-captions"
                 else:
                     runtime.check_space(64*1024**2)
-                    url = f"https://www.youtube.com/watch?v={ident}"
-                    info = json.loads(run_yt(runtime, db, ["--skip-download", "--dump-single-json", url], ident))
+                    info, metadata_cache = caption_metadata(runtime, db, ident)
                     human, automatic = info.get("subtitles", {}), info.get("automatic_captions", {})
                     selected = next(((lang, human[lang], "youtube-human") for lang in langs if human.get(lang)), None)
                     if not selected:
                         selected = next(((lang, automatic[lang], "youtube-auto") for lang in langs if automatic.get(lang)), None)
                     if not selected:
+                        metadata_cache.unlink(missing_ok=True)
                         record_failure(db, ident, "ERR_NO_EN_FR", 168)
                         continue
                     lang, formats, source = selected
                     fmt = next((f for f in formats if f.get("ext") == "vtt"), None)
                     if not fmt:
+                        metadata_cache.unlink(missing_ok=True)
                         record_failure(db, ident, "ERR_NO_EN_FR", 168)
                         continue
                     # Reuse already extracted metadata in yt-dlp, avoiding a second video extraction.
@@ -425,6 +454,7 @@ def sync(runtime, channel=None, force=False, limit=500, offline=False, youtube_i
                             raise RuntimeError("Sous-titres VTT absents ou ambigus")
                         raw = files[0].read_text(encoding="utf-8-sig")
                     archive = runtime.archive/f"{ident}.{lang}.vtt.gz"
+                    metadata_cache.unlink(missing_ok=True)
                 temporary = archive.with_suffix(".gz.tmp")
                 temporary.write_bytes(gzip.compress(raw.encode("utf-8"), mtime=0))
                 if gzip.decompress(temporary.read_bytes()).decode("utf-8") != raw:

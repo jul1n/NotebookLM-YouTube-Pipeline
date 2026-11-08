@@ -337,6 +337,26 @@ class PipelineTest(unittest.TestCase):
         with core.closing_database(core.connect(self.dbpath, True)) as db:
             self.assertEqual(db.execute('SELECT transcript FROM videos').fetchone()[0], 'Oui')
 
+    def test_caption_metadata_cache_avoids_reextraction_and_excludes_cookies(self):
+        info={'id':'abcdefghijk','title':'Test','subtitles':{},'http_headers':{'User-Agent':'test','Cookie':'SECRET'},'cookies':'SECRET'}
+        with core.closing_database(core.connect(self.dbpath)) as db:
+            with patch.object(core,'run_yt',return_value=json.dumps(info)) as run:
+                first,path=core.caption_metadata(self.runtime,db,'abcdefghijk')
+                second,_=core.caption_metadata(self.runtime,db,'abcdefghijk')
+        self.assertEqual(run.call_count,1)
+        self.assertEqual(second['id'],'abcdefghijk')
+        self.assertNotIn('SECRET',path.read_text())
+
+    def test_caption_metadata_cache_expires(self):
+        import os,time
+        folder=self.runtime.work/'caption-metadata';folder.mkdir(parents=True)
+        path=folder/'abcdefghijk.json';path.write_text(json.dumps({'id':'abcdefghijk','title':'old'}))
+        os.utime(path,(time.time()-7*3600,time.time()-7*3600))
+        with core.closing_database(core.connect(self.dbpath)) as db:
+            with patch.object(core,'run_yt',return_value=json.dumps({'id':'abcdefghijk','title':'new'})) as run:
+                info,_=core.caption_metadata(self.runtime,db,'abcdefghijk')
+        run.assert_called_once();self.assertEqual(info['title'],'new')
+
     def test_fresh_sync_extracts_metadata_once_and_downloads_human_caption(self):
         calls = []
         def fake_yt(runtime, db, args, ident=None):

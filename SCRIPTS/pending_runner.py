@@ -1,7 +1,7 @@
 """Manual, resumable caption acquisition for an immutable pending-video queue."""
 import argparse
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -58,7 +58,7 @@ class PendingBatch:
         for outcome,n in counts.items():text+=f'| {outcome} | {n} |\n'
         if self.state.get('blocked_reason'):text+=f"\nBlocage : {self.state['blocked_reason']}\n"
         if self.state.get('error'):text+=f"\nErreur locale : {self.state['error']}\n"
-        text+='\nSous-titres uniquement. Sources locales prioritaires. Au moins une minute entre démarrages yt-dlp. Arrêt au premier échec réseau. Aucun audio ni suppression. Sauvegarde tous les 50 éléments et à la fin.\n'
+        text+='\nSous-titres uniquement. Sources locales prioritaires. Au moins une minute entre démarrages yt-dlp. HTTP 429 : pause de 62 minutes et reprise, au maximum trois blocages consécutifs avant arrêt. Autres erreurs : arrêt. Aucun audio ni suppression. Sauvegarde tous les 50 éléments et à la fin.\n'
         (self.folder/'REPORT.md').write_text(text,encoding='utf-8')
 
     def stage(self,name,action):
@@ -89,13 +89,45 @@ class PendingBatch:
         self.state.pop('request_in_flight',None);self.save()
         return result
 
+    def wait_for_rate_limit(self):
+        self.state['status']='paused';self.state['current_stage']='rate_limit_pause';self.save()
+        while True:
+            with core.closing_database(core.connect(self.runtime.db,True)) as db:
+                row=db.execute("SELECT value FROM pipeline_control WHERE key='youtube_pause_until'").fetchone()
+            if not row or row[0]<=core.now():break
+            self.state['pause_until_utc']=row[0];self.save()
+            due=datetime.strptime(row[0],'%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
+            self.runtime.check_space();time.sleep(min(30,max(1,due-time.time())))
+        self.state['status']='running';self.state.pop('pause_until_utc',None);self.save()
+
+    def resume_blocked(self):
+        if self.state['status']!='blocked':raise ValueError('Only a known HTTP 429 stop can be resumed')
+        index=self.state['cursor']-1
+        if index<0:raise ValueError('No interrupted video recorded')
+        ident=self.queue[index]['youtube_id']
+        with core.closing_database(core.connect(self.runtime.db,True)) as db:
+            row=db.execute('SELECT status FROM videos WHERE youtube_id=?',(ident,)).fetchone()
+        if not row or row[0]!='ERR_429_BLOCK' or self.state['results'].get(ident,{}).get('outcome')!='network_blocked':
+            raise ValueError('Interrupted request requires manual diagnosis')
+        self.state.setdefault('resume_history',[]).append(dict(resumed_at=core.now(),cursor=self.state['cursor'],reason=self.state.get('blocked_reason'),previous_result=self.state['results'].get(ident)))
+        self.state['cursor']=index
+        self.state.pop('request_in_flight',None);self.state.pop('blocked_reason',None)
+        self.state.pop('completed_at',None);self.state['status']='prepared'
+        # Previous exports and backups remain recorded, but final stages must run again.
+        for name in ['integrity_final','packs','dashboard','followup','backup_final']:
+            if name in self.state['stages']:
+                self.state.setdefault('previous_final_stages',[]).append({name:self.state['stages'].pop(name)})
+        self.save()
+
     def outcome(self,ident):
         with core.closing_database(core.connect(self.runtime.db,True)) as db:
             row=db.execute("SELECT status,length(trim(COALESCE(transcript,''))) n FROM videos WHERE youtube_id=?",(ident,)).fetchone()
         if row is None:return 'missing_record'
         return 'transcript_acquired' if row['n'] else row['status'] or 'unchanged'
 
-    def run(self):
+    def run(self,resume=False):
+        if resume:
+            with core.acquisition_lock(self.runtime):self.resume_blocked()
         if self.state['status'] in {'done','blocked','error'}:
             print('Existing terminal state; no automatic retry.',flush=True);return
         original=core.run_yt
@@ -106,6 +138,9 @@ class PendingBatch:
             try:
                 self.stage('integrity_before',lambda:integrity(self.runtime))
                 self.stage('backup_before',lambda:core.backup(self.runtime))
+                if self.state.get('resume_history'):
+                    self.stage('integrity_resume_'+str(len(self.state['resume_history'])),lambda:integrity(self.runtime))
+                self.wait_for_rate_limit()
                 self.state['current_stage']='local_inventory';self.save()
                 captions=core.caption_inventory(self.runtime)
                 self.state['local_caption_candidates']=sum(len(v) for v in captions.values());self.save()
@@ -120,14 +155,26 @@ class PendingBatch:
                         attempt=db.execute('SELECT next_attempt_at FROM pipeline_attempts WHERE youtube_id=?',(ident,)).fetchone()
                     if current is None:outcome='missing_record'
                     elif current['t']:outcome='already_has_text'
-                    elif current['status']!='PENDING':outcome='status_changed_skipped'
+                    elif current['status'] not in {'PENDING','ERR_429_BLOCK'}:outcome='status_changed_skipped'
                     elif attempt and attempt[0]>core.now():outcome='deferred_skipped'
                     else:
-                        try:
-                            core.sync(self.runtime,limit=1,youtube_ids=[ident],captions=captions)
-                            outcome=self.outcome(ident)
-                        except BatchStopped:
-                            outcome='network_blocked';blocked=True
+                        while True:
+                            try:
+                                core.sync(self.runtime,limit=1,youtube_ids=[ident],captions=captions)
+                                outcome=self.outcome(ident)
+                                self.state['consecutive_rate_limits']=0
+                                break
+                            except BatchStopped:
+                                current_outcome=self.outcome(ident)
+                                if current_outcome=='ERR_429_BLOCK' and self.state.get('consecutive_rate_limits',0)<2:
+                                    self.state['cooldowns']=self.state.get('cooldowns',0)+1
+                                    self.state['consecutive_rate_limits']=self.state.get('consecutive_rate_limits',0)+1
+                                    self.state.setdefault('rate_limit_events',[]).append(dict(youtube_id=ident,at=core.now()))
+                                    self.wait_for_rate_limit()
+                                    self.state.pop('request_in_flight',None);self.state.pop('blocked_reason',None);self.save()
+                                    continue
+                                outcome='network_blocked';blocked=True
+                                break
                     self.state['results'][ident]=dict(outcome=outcome,completed_at=core.now())
                     self.state['cursor']=index+1;self.save()
                     print(json.dumps(dict(processed=index+1,total=len(self.queue),id=ident,outcome=outcome),ensure_ascii=False),flush=True)
@@ -154,12 +201,13 @@ def main():
     parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parent.parent)
     parser.add_argument('--job',type=Path,required=True)
     parser.add_argument('--prepare',action='store_true')
+    parser.add_argument('--resume',action='store_true')
     args=parser.parse_args();runtime=core.Runtime(args.root)
     folder=args.job.resolve()
     if not folder.is_relative_to((runtime.database_dir/'pending_runs').resolve()):raise ValueError('Job must be under DATABASE/pending_runs')
     batch=PendingBatch(runtime,folder)
     if args.prepare:batch.save();print(json.dumps(batch.state,ensure_ascii=False))
-    else:batch.run()
+    else:batch.run(resume=args.resume)
 
 
 if __name__=='__main__':main()

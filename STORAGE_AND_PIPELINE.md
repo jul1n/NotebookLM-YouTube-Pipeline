@@ -138,3 +138,12 @@ L'application exige le journal `pipeline_revisions` existant, effectue une sauve
 Le traitement indexe les sources locales une fois, sélectionne chaque identifiant explicitement et espace les invocations yt-dlp d’au moins 60 secondes. Il désactive les relances internes et s’arrête au premier échec réseau. Il conserve un état privé, une liste QUEUE.json et un REPORT.md dans le répertoire du lot. Il sauvegarde avant acquisition, tous les 50 éléments et à la fin. Packs et tableau de bord sont actualisés à la fin ou après un blocage réseau.
 
 Un lot terminé, bloqué ou en erreur n’est pas relancé automatiquement. Une requête interrompue nécessite une vérification avant nouvelle tentative. Aucun audio ni suppression n’est exécuté. La commande peut être lancée une fois en arrière-plan, sans créer de planification récurrente. Sur plusieurs centaines de vidéos, le traitement peut durer plus d’une journée. Le plafond local reste de 10 Go.
+
+
+### Reprise après limitation et cache des extractions
+
+Le lot de sous-titres conserve les métadonnées d’extraction utiles pendant six heures dans le cache local privé. Une reprise après échec des sous-titres réutilise ces données au lieu de réextraire la même vidéo. Les cookies et en-têtes d’authentification ne sont pas conservés dans ce cache. Les métadonnées périmées sont retirées à la prochaine extraction. La rétention durable des sous-titres et du texte reste inchangée.
+
+Après HTTP 429, le moteur attend la fin de la suspension globale de 62 minutes, puis reprend la même vidéo. Trois blocages consécutifs provoquent un arrêt définitif du passage, sans boucle de relance indéfinie. Une vidéo traitée réinitialise uniquement ce compteur consécutif ; le nombre total d’appels et de tentatives est conservé. Les autres erreurs arrêtent toujours le lot. Le rythme reste d’au moins une minute entre invocations yt-dlp, avec un seul processus réseau.
+
+Pour reprendre explicitement un ancien lot arrêté sur HTTP 429 : `python SCRIPTS/pending_runner.py --job DATABASE/pending_runs/nom-du-lot --resume`. Les résultats antérieurs sont conservés, la dernière vidéo bloquée est reprise et les contrôles finaux sont régénérés. Un arrêt d’origine inconnue n’est pas repris automatiquement. Les sections antérieures décrivant l’arrêt à chaque 429 correspondent au comportement initial, remplacé par cette reprise bornée.
