@@ -92,6 +92,30 @@ class PendingTest(unittest.TestCase):
         self.assertEqual(batch.state['status'],'blocked')
         self.assertEqual(batch.state['cursor'],1)
 
+    def test_continue_untried_does_not_rewind_failed_video(self):
+        batch=pending.PendingBatch(self.runtime,self.folder)
+        batch.state.update(status='blocked',cursor=1,request_in_flight={'youtube_id':'lmnopqrstuv'})
+        batch.state['results']['lmnopqrstuv']={'outcome':'network_blocked'}
+        batch.state['network']['calls']=19
+        batch.continue_untried()
+        self.assertEqual(batch.state['cursor'],1)
+        self.assertTrue(batch.state['untried_only'])
+        self.assertEqual(batch.state['network']['calls'],19)
+        self.assertNotIn('request_in_flight',batch.state)
+        self.assertEqual(batch.state['results']['lmnopqrstuv']['outcome'],'network_blocked')
+
+    def test_untried_mode_skips_existing_attempt_even_when_due(self):
+        batch=pending.PendingBatch(self.runtime,self.folder);batch.state['untried_only']=True
+        with core.closing_database(core.connect(self.runtime.db)) as db:
+            db.execute("INSERT INTO pipeline_attempts VALUES('abcdefghijk',1,'ERR_DL_FAIL','2000-01-01','2000-01-01')")
+        def sync(rt,**kwargs):
+            self.assertEqual(kwargs['youtube_ids'],['lmnopqrstuv'])
+            with core.closing_database(core.connect(self.runtime.db)) as db:db.execute("UPDATE videos SET transcript='Text' WHERE youtube_id='lmnopqrstuv'")
+        with patch.object(core,'sync',side_effect=sync) as run,patch.object(core,'caption_inventory',return_value={}),patch.object(core,'backup',return_value=None),patch.object(core,'packs',return_value=None),patch.object(core,'list_caption_followup',return_value=None),patch.object(pending,'integrity',return_value={}),patch.object(pending,'export_dashboard',return_value={}),patch.object(batch,'wait_for_rate_limit'):
+            batch.run()
+        self.assertEqual(run.call_count,1)
+        self.assertEqual(batch.state['results']['abcdefghijk']['outcome'],'previously_attempted_skipped')
+
     def test_explicit_resume_keeps_network_counts_and_completed_results(self):
         batch=pending.PendingBatch(self.runtime,self.folder)
         batch.state.update(status='blocked',cursor=2,request_in_flight={'youtube_id':'abcdefghijk'})

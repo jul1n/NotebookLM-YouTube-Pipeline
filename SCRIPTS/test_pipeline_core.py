@@ -357,6 +357,14 @@ class PipelineTest(unittest.TestCase):
                 info,_=core.caption_metadata(self.runtime,db,'abcdefghijk')
         run.assert_called_once();self.assertEqual(info['title'],'new')
 
+    def test_no_caption_metadata_never_downloads_subtitles(self):
+        with patch.object(core,'run_yt',return_value=json.dumps({'id':'abcdefghijk','subtitles':{},'automatic_captions':{}})) as run:
+            core.sync(self.runtime,captions={})
+        self.assertEqual(run.call_count,1)
+        self.assertIn('--dump-single-json',run.call_args.args[2])
+        with core.closing_database(core.connect(self.dbpath,True)) as db:
+            self.assertEqual(db.execute('SELECT status FROM videos').fetchone()[0],'ERR_NO_EN_FR')
+
     def test_fresh_sync_extracts_metadata_once_and_downloads_human_caption(self):
         calls = []
         def fake_yt(runtime, db, args, ident=None):

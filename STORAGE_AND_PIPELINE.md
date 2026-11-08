@@ -147,3 +147,12 @@ Le lot de sous-titres conserve les métadonnées d’extraction utiles pendant s
 Après HTTP 429, le moteur attend la fin de la suspension globale de 62 minutes, puis reprend la même vidéo. Trois blocages consécutifs provoquent un arrêt définitif du passage, sans boucle de relance indéfinie. Une vidéo traitée réinitialise uniquement ce compteur consécutif ; le nombre total d’appels et de tentatives est conservé. Les autres erreurs arrêtent toujours le lot. Le rythme reste d’au moins une minute entre invocations yt-dlp, avec un seul processus réseau.
 
 Pour reprendre explicitement un ancien lot arrêté sur HTTP 429 : `python SCRIPTS/pending_runner.py --job DATABASE/pending_runs/nom-du-lot --resume`. Les résultats antérieurs sont conservés, la dernière vidéo bloquée est reprise et les contrôles finaux sont régénérés. Un arrêt d’origine inconnue n’est pas repris automatiquement. Les sections antérieures décrivant l’arrêt à chaque 429 correspondent au comportement initial, remplacé par cette reprise bornée.
+
+
+### Priorité aux vidéos jamais essayées
+
+`--continue-untried` reprend un lot arrêté en conservant son préfixe traité et ses compteurs. Le reste de la liste est trié par date de publication décroissante. Toute vidéo possédant déjà une tentative enregistrée est ignorée dans ce mode. La vidéo du dernier échec reste différée, sans être reprise avant les autres. La liste avant tri est sauvegardée dans le dossier du lot.
+
+L’extraction des métadonnées vérifie les sous-titres disponibles. Si aucun VTT FR/EN exploitable n’est annoncé, le moteur inscrit ERR_NO_EN_FR et n’effectue aucun appel de téléchargement de sous-titre. Un échec de téléchargement n’est jamais reclassé comme une absence de sous-titres sans cette preuve.
+
+Dans ce mode, une erreur isolée est inscrite puis différée. HTTP 429 déclenche toujours la pause globale de 62 minutes avant de passer à une vidéo jamais essayée. Trois échecs consécutifs arrêtent le passage pour éviter de répéter une panne globale. Les résultats et les raisons des erreurs restent enregistrés.

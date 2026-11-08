@@ -54,6 +54,7 @@ class PendingBatch:
         text+=f"État : **{self.state['status']}**. Dernière mise à jour UTC : {self.state.get('updated_at',self.state['created_at'])}.\n\n"
         text+=f"Liste initiale fixe : {self.state['total']} vidéos. Terminées : {self.state['cursor']}. Appels yt-dlp : {self.state['network']['calls']}.\n\n"
         if self.state.get('current'):text+=f"Vidéo en cours : https://www.youtube.com/watch?v={self.state['current']}\n\n"
+        if self.state.get('untried_only'):text+='Priorité aux vidéos sans tentative, plus récentes en premier. Échecs isolés différés ; trois échecs consécutifs arrêtent le passage.\n\n'
         text+='| Résultat | Nombre |\n|---|---:|\n'
         for outcome,n in counts.items():text+=f'| {outcome} | {n} |\n'
         if self.state.get('blocked_reason'):text+=f"\nBlocage : {self.state['blocked_reason']}\n"
@@ -119,13 +120,31 @@ class PendingBatch:
                 self.state.setdefault('previous_final_stages',[]).append({name:self.state['stages'].pop(name)})
         self.save()
 
+    def continue_untried(self):
+        if self.state['status']!='blocked':raise ValueError('Only a stopped job can continue')
+        # Keep the processed prefix and every attempt counter; reorder only its untouched tail.
+        original=json.loads((self.folder/'QUEUE.json').read_text(encoding='utf-8'))
+        core.atomic_json(self.folder/('QUEUE.before-untried-'+str(time.time_ns())+'.json'),original)
+        cursor=self.state['cursor']
+        self.queue=self.queue[:cursor]+sorted(self.queue[cursor:],key=lambda row:(row.get('upload_date') or '',row['youtube_id']),reverse=True)
+        core.atomic_json(self.folder/'QUEUE.json',self.queue)
+        self.state.setdefault('resume_history',[]).append(dict(resumed_at=core.now(),cursor=cursor,mode='untried_first',reason=self.state.get('blocked_reason')))
+        self.state.update(status='prepared',untried_only=True,consecutive_failures=0)
+        self.state.pop('request_in_flight',None);self.state.pop('blocked_reason',None);self.state.pop('completed_at',None)
+        for name in ['integrity_final','packs','dashboard','followup','backup_final']:
+            if name in self.state['stages']:
+                self.state.setdefault('previous_final_stages',[]).append({name:self.state['stages'].pop(name)})
+        self.save()
+
     def outcome(self,ident):
         with core.closing_database(core.connect(self.runtime.db,True)) as db:
             row=db.execute("SELECT status,length(trim(COALESCE(transcript,''))) n FROM videos WHERE youtube_id=?",(ident,)).fetchone()
         if row is None:return 'missing_record'
         return 'transcript_acquired' if row['n'] else row['status'] or 'unchanged'
 
-    def run(self,resume=False):
+    def run(self,resume=False,untried=False):
+        if untried:
+            with core.acquisition_lock(self.runtime):self.continue_untried()
         if resume:
             with core.acquisition_lock(self.runtime):self.resume_blocked()
         if self.state['status'] in {'done','blocked','error'}:
@@ -155,6 +174,7 @@ class PendingBatch:
                         attempt=db.execute('SELECT next_attempt_at FROM pipeline_attempts WHERE youtube_id=?',(ident,)).fetchone()
                     if current is None:outcome='missing_record'
                     elif current['t']:outcome='already_has_text'
+                    elif self.state.get('untried_only') and attempt:outcome='previously_attempted_skipped'
                     elif current['status'] not in {'PENDING','ERR_429_BLOCK'}:outcome='status_changed_skipped'
                     elif attempt and attempt[0]>core.now():outcome='deferred_skipped'
                     else:
@@ -163,9 +183,23 @@ class PendingBatch:
                                 core.sync(self.runtime,limit=1,youtube_ids=[ident],captions=captions)
                                 outcome=self.outcome(ident)
                                 self.state['consecutive_rate_limits']=0
+                                self.state['consecutive_failures']=0
                                 break
                             except BatchStopped:
                                 current_outcome=self.outcome(ident)
+                                if self.state.get('untried_only'):
+                                    reason=self.state.get('blocked_reason','Network failure')
+                                    self.state.setdefault('deferred_errors',[]).append(dict(youtube_id=ident,reason=reason,at=core.now()))
+                                    self.state['consecutive_failures']=self.state.get('consecutive_failures',0)+1
+                                    if self.state['consecutive_failures']>=3:
+                                        outcome='network_blocked';blocked=True
+                                        break
+                                    if current_outcome=='ERR_429_BLOCK':
+                                        self.state['cooldowns']=self.state.get('cooldowns',0)+1
+                                        self.wait_for_rate_limit()
+                                    outcome='rate_limited_deferred' if current_outcome=='ERR_429_BLOCK' else 'download_failed_deferred'
+                                    self.state.pop('request_in_flight',None);self.state.pop('blocked_reason',None);self.save()
+                                    break
                                 if current_outcome=='ERR_429_BLOCK' and self.state.get('consecutive_rate_limits',0)<2:
                                     self.state['cooldowns']=self.state.get('cooldowns',0)+1
                                     self.state['consecutive_rate_limits']=self.state.get('consecutive_rate_limits',0)+1
@@ -201,13 +235,15 @@ def main():
     parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parent.parent)
     parser.add_argument('--job',type=Path,required=True)
     parser.add_argument('--prepare',action='store_true')
-    parser.add_argument('--resume',action='store_true')
+    mode=parser.add_mutually_exclusive_group()
+    mode.add_argument('--resume',action='store_true')
+    mode.add_argument('--continue-untried',action='store_true')
     args=parser.parse_args();runtime=core.Runtime(args.root)
     folder=args.job.resolve()
     if not folder.is_relative_to((runtime.database_dir/'pending_runs').resolve()):raise ValueError('Job must be under DATABASE/pending_runs')
     batch=PendingBatch(runtime,folder)
     if args.prepare:batch.save();print(json.dumps(batch.state,ensure_ascii=False))
-    else:batch.run(resume=args.resume)
+    else:batch.run(resume=args.resume,untried=args.continue_untried)
 
 
 if __name__=='__main__':main()
