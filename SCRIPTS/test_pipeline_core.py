@@ -103,6 +103,19 @@ class PipelineTest(unittest.TestCase):
         with patch.object(core, 'run_yt', side_effect=AssertionError('retry too soon')):
             core.sync(self.runtime)
 
+    def test_429_pause_and_video_delay_are_62_minutes(self):
+        from datetime import datetime,timezone
+        before=datetime.now(timezone.utc)
+        with core.closing_database(core.connect(self.dbpath)) as db:
+            core.init_state(db)
+            with self.assertRaises(RuntimeError):core.rate_limit(db,'HTTP Error 429','abcdefghijk')
+            global_due=db.execute("SELECT value FROM pipeline_control WHERE key='youtube_pause_until'").fetchone()[0]
+            video_due=db.execute("SELECT next_attempt_at FROM pipeline_attempts WHERE youtube_id='abcdefghijk'").fetchone()[0]
+        for value in [global_due,video_due]:
+            seconds=(datetime.strptime(value,'%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)-before).total_seconds()
+            self.assertGreater(seconds,62*60-2)
+            self.assertLess(seconds,62*60+2)
+
     def test_429_persists_global_pause(self):
         with core.closing_database(core.connect(self.dbpath)) as db:
             core.init_state(db)

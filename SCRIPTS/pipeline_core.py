@@ -21,6 +21,7 @@ from contextlib import contextmanager
 
 GIB = 1024 ** 3
 BUDGET_BYTES = 10_000_000_000
+HTTP_429_PAUSE_MINUTES = 62
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 CAPTION_VERSION = "timed-display-carry-v3"
 
@@ -258,9 +259,9 @@ def record_failure(db, ident, status, hours):
 
 def rate_limit(db, output, ident=None):
     if re.search(r"HTTP(?: Error)?\s*429|Too Many Requests", output, re.I):
-        due = (datetime.now(timezone.utc)+timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+        due = (datetime.now(timezone.utc)+timedelta(minutes=HTTP_429_PAUSE_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
         if ident:
-            record_failure(db, ident, "ERR_429_BLOCK", 6)
+            record_failure(db, ident, "ERR_429_BLOCK", HTTP_429_PAUSE_MINUTES / 60)
         with db:
             db.execute("INSERT OR REPLACE INTO pipeline_control VALUES ('youtube_pause_until',?)", (due,))
         raise RuntimeError(f"HTTP 429 : arrêt global, reprise après {due} UTC.")
